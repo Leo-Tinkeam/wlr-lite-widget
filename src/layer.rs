@@ -1,0 +1,349 @@
+use smithay_client_toolkit::{
+    compositor::{CompositorHandler, CompositorState},
+    delegate_compositor, delegate_layer, delegate_output,
+    delegate_pointer, delegate_registry, delegate_seat,
+    delegate_shm,
+    output::{OutputHandler, OutputState},
+    registry::{ProvidesRegistryState, RegistryState},
+    registry_handlers,
+    seat::{
+        Capability, SeatHandler, SeatState,
+        pointer::{PointerEvent, PointerEventKind, PointerHandler}
+    },
+    shell::{
+        WaylandSurface,
+        wlr_layer::{
+            Anchor, Layer as SctkLayer, LayerShell,
+            LayerShellHandler, LayerSurface,LayerSurfaceConfigure,
+        },
+    },
+    shm::{Shm, ShmHandler, slot::SlotPool},
+};
+use wayland_client::{
+    Connection,
+    globals::registry_queue_init,
+    protocol::{wl_output, wl_pointer, wl_seat, wl_shm, wl_surface},
+    QueueHandle,
+};
+
+pub struct Layer {
+}
+
+impl Layer {
+    // TODO: SctkLayer::Top ; Some("simple_layer") ; Anchor::TOP doivent être en entrée
+    // TODO: Width, Height doit être un objet size qui a le droit d'être en pixel ou en pourcentage (chacun des deux indépendamment)
+    pub fn new((width, height): (u32, u32), render: fn(&mut [u8], u32, u32, bool)) {
+        // Connecting to the compositor (server)
+        let conn = Connection::connect_to_env().unwrap();
+
+        // Enumerate the list of globals to get the protocols the server implements.
+        let (globals, mut event_queue) = registry_queue_init(&conn).unwrap();
+        let qh = event_queue.handle();
+
+        // The compositor (not to be confused with the server which is commonly called the compositor) allows
+        // configuring surfaces to be presented.
+        let compositor = CompositorState::bind(&globals, &qh).expect("wl_compositor is not available");
+
+        // This app uses the wlr layer shell, which may not be available with every compositor.
+        let layer_shell = LayerShell::bind(&globals, &qh).expect("layer shell is not available");
+
+        // We use wl_shm to allow software rendering to a buffer we share with the compositor process.
+        let shm = Shm::bind(&globals, &qh).expect("wl_shm is not available");
+
+        // A layer surface is created from a surface.
+        let surface = compositor.create_surface(&qh);
+
+        // And then we create our layer shell.
+        let layer =
+            layer_shell.create_layer_surface(&qh, surface, SctkLayer::Top, Some("simple_layer"), None);
+
+        // Configure the layer surface with anchor on screen and desired size
+        layer.set_anchor(Anchor::TOP);
+        layer.set_size(width, height);
+
+        // In order for the layer surface to be mapped, we need to perform an initial commit with no attached\
+        // buffer. For more info, see WaylandSurface::commit
+        // The compositor will respond with an initial configure that we can then use to present to the layer
+        // surface with the correct options.
+        layer.commit();
+
+        // We don't know how large the window will be yet, so lets assume the minimum size we suggested for the
+        // initial memory allocation.
+        let pool = SlotPool::new((width * height * 4).try_into().expect("Too large dimension"), &shm).expect("Failed to create pool");
+
+        let mut simple_layer = SimpleLayer {
+            // Seats and outputs may be hotplugged at runtime, therefore we need to setup a registry state to
+            // listen for seats and outputs.
+            registry_state: RegistryState::new(&globals),
+            seat_state: SeatState::new(&globals, &qh),
+            output_state: OutputState::new(&globals, &qh),
+            shm,
+
+            exit: false,
+            first_configure: true,
+            pool,
+            width: width,
+            height: height,
+            clicked: false,
+            layer,
+            pointer: None,
+
+            render: render,
+        };
+
+        // We don't draw immediately, the configure will notify us when to first draw.
+        loop {
+            event_queue.blocking_dispatch(&mut simple_layer).unwrap();
+            if simple_layer.exit {
+                break;
+            }
+        }
+    }
+}
+
+struct SimpleLayer {
+    registry_state: RegistryState,
+    seat_state: SeatState,
+    output_state: OutputState,
+    shm: Shm,
+
+    exit: bool,
+    first_configure: bool,
+    pool: SlotPool,
+    width: u32,
+    height: u32,
+    clicked: bool,
+    layer: LayerSurface,
+    pointer: Option<wl_pointer::WlPointer>,
+
+    render: fn(&mut [u8], u32, u32, bool)
+}
+
+impl CompositorHandler for SimpleLayer {
+    fn scale_factor_changed(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _surface: &wl_surface::WlSurface,
+        _new_factor: i32,
+    ) {
+        // This is not needed since scale change also call update_output from OutputHandler that is implemented
+    }
+
+    fn transform_changed(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _surface: &wl_surface::WlSurface,
+        _new_transform: wl_output::Transform,
+    ) {
+        // This is not needed since rotation also call update_output from OutputHandler that is implemented
+    }
+
+    fn frame(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _surface: &wl_surface::WlSurface,
+        _time: u32,
+    ) {
+        self.draw();
+    }
+
+    fn surface_enter(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _surface: &wl_surface::WlSurface,
+        _output: &wl_output::WlOutput,
+    ) {
+        // TODO: Will be used for "hover" animations
+    }
+
+    fn surface_leave(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _surface: &wl_surface::WlSurface,
+        _output: &wl_output::WlOutput,
+    ) {
+        // TODO: Will be used for "hover" animations
+    }
+}
+
+impl OutputHandler for SimpleLayer {
+    fn output_state(&mut self) -> &mut OutputState {
+        &mut self.output_state
+    }
+
+    fn new_output(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _output: wl_output::WlOutput,
+    ) {
+        // TODO: Needed when screen is disconnected (changing TTY and coming back for example)
+    }
+
+    fn update_output(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _output: wl_output::WlOutput,
+    ) {
+        if let Some(info) = self.output_state.info(&_output) {
+            // When the screen is rotated (transform), this goes from 3840x2160 to 2160x3840 (no need to consider it)
+            // This is the size after division by scale_factor (no need to consider it)
+            println!("infos : size {}x{}", info.logical_size.unwrap().0, info.logical_size.unwrap().1);
+        }
+        // TODO: Should redraw when % are used (and not when px are used)
+    }
+
+    fn output_destroyed(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _output: wl_output::WlOutput,
+    ) {
+        // TODO: Needed when screen is disconnected (changing TTY and coming back for example)
+    }
+}
+
+impl LayerShellHandler for SimpleLayer {
+    fn closed(&mut self, _conn: &Connection, _qh: &QueueHandle<Self>, _layer: &LayerSurface) {
+        self.exit = true;
+    }
+
+    fn configure(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _layer: &LayerSurface,
+        _configure: LayerSurfaceConfigure,
+        _serial: u32,
+    ) {
+        // Initiate the first draw.
+        if self.first_configure {
+            self.first_configure = false;
+            self.draw();
+        }
+    }
+}
+
+impl SeatHandler for SimpleLayer {
+    fn seat_state(&mut self) -> &mut SeatState {
+        &mut self.seat_state
+    }
+
+    fn new_seat(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_seat::WlSeat) {
+        // Not needed for our widget
+    }
+
+    fn new_capability(
+        &mut self,
+        _conn: &Connection,
+        qh: &QueueHandle<Self>,
+        seat: wl_seat::WlSeat,
+        capability: Capability,
+    ) {
+        if capability == Capability::Pointer && self.pointer.is_none() {
+            let pointer = self.seat_state.get_pointer(qh, &seat).expect("Failed to create pointer");
+            self.pointer = Some(pointer);
+        }
+    }
+
+    fn remove_capability(
+        &mut self,
+        _conn: &Connection,
+        _: &QueueHandle<Self>,
+        _: wl_seat::WlSeat,
+        capability: Capability,
+    ) {
+        if capability == Capability::Pointer && self.pointer.is_some() {
+            self.pointer.take().unwrap().release();
+        }
+    }
+
+    fn remove_seat(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_seat::WlSeat) {
+        // Not needed for our widget
+    }
+}
+
+impl PointerHandler for SimpleLayer {
+    fn pointer_frame(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _pointer: &wl_pointer::WlPointer,
+        events: &[PointerEvent],
+    ) {
+        use PointerEventKind::*;
+        for event in events {
+            // Ignore events for other surfaces
+            if &event.surface != self.layer.wl_surface() {
+                continue;
+            }
+            match event.kind {
+                Enter { .. } => {
+                    println!("Pointer entered @{:?}", event.position);
+                }
+                Leave { .. } => {
+                    println!("Pointer left");
+                }
+                Motion { .. } => {}
+                Press { button, .. } => {
+                    println!("Press {:x} @ {:?}", button, event.position);
+                    self.clicked = !self.clicked;
+                    self.draw();
+                }
+                Release { button, .. } => {
+                    println!("Release {:x} @ {:?}", button, event.position);
+                }
+                Axis { horizontal, vertical, .. } => {
+                    println!("Scroll H:{horizontal:?}, V:{vertical:?}");
+                }
+            }
+        }
+    }
+}
+
+impl ShmHandler for SimpleLayer {
+    fn shm_state(&mut self) -> &mut Shm {
+        &mut self.shm
+    }
+}
+
+impl ProvidesRegistryState for SimpleLayer {
+    fn registry(&mut self) -> &mut RegistryState {
+        &mut self.registry_state
+    }
+    registry_handlers![OutputState, SeatState];
+}
+
+impl SimpleLayer {
+    pub fn draw(&mut self) {
+        let width = self.width;
+        let height = self.height;
+        let stride = self.width as i32 * 4;
+        let (buffer, canvas) = self.pool.create_buffer(width as i32, height as i32, stride, wl_shm::Format::Argb8888).expect("Error while creating buffer");
+
+        // Render with the user render function
+        (self.render)(canvas, width, height, self.clicked);
+
+        // Damage the entire window
+        // Here we should damage only concerned area
+        self.layer.wl_surface().damage_buffer(0, 0, width as i32, height as i32);
+
+        // Attach and commit to present.
+        buffer.attach_to(self.layer.wl_surface()).expect("buffer attach");
+        self.layer.commit();
+    }
+}
+
+delegate_compositor!(SimpleLayer);
+delegate_output!(SimpleLayer);
+delegate_shm!(SimpleLayer);
+delegate_seat!(SimpleLayer);
+delegate_pointer!(SimpleLayer);
+delegate_layer!(SimpleLayer);
+delegate_registry!(SimpleLayer);
