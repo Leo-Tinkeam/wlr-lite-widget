@@ -59,7 +59,7 @@ impl Layer {
             layer_shell: layer_shell,
 
             exit: false,
-            first_configure: true,
+            need_redraw: true,
             pool: None,
             widget_size: widget_size,
             width: None,
@@ -90,7 +90,7 @@ struct SimpleLayer {
     layer_shell: LayerShell,
 
     exit: bool,
-    first_configure: bool,
+    need_redraw: bool,
     pool: Option<SlotPool>,
     widget_size: WidgetSize,
     width: Option<u32>,
@@ -190,15 +190,11 @@ impl OutputHandler for SimpleLayer {
                 // surface with the correct options.
                 new_layer.commit();
 
-                // We don't know how large the window will be yet, so lets assume the minimum size we suggested for the
-                // initial memory allocation.
                 self.pool = Some(SlotPool::new((self.width.unwrap() * self.height.unwrap() * 4).try_into().expect("Too large dimension"), &self.shm).expect("Failed to create pool"));
-
                 self.layer = Some(new_layer);
-                self.first_configure = true;
+                self.need_redraw = true;
             }
         }
-        // TODO: Use new size when we use % -> Pas besoin de le faire au-dessus ?
     }
 
     fn update_output(
@@ -207,12 +203,19 @@ impl OutputHandler for SimpleLayer {
         _qh: &QueueHandle<Self>,
         output: wl_output::WlOutput,
     ) {
-        if let Some(info) = self.output_state.info(&output) {
-            // When the screen is rotated (transform), this goes from 3840x2160 to 2160x3840 (no need to consider it)
-            // This is the size after division by scale_factor (no need to consider it)
-            println!("infos : size {}x{}", info.logical_size.unwrap().0, info.logical_size.unwrap().1);
-        }
-        // TODO: Should redraw when % are used (and not when px are used)
+        // When the screen is rotated (transform), this goes from 3840x2160 to 2160x3840 (no need to consider it)
+        // This is the size after division by scale_factor (no need to consider it)
+        let (screen_width, screen_height) = if let Some(info) = self.output_state.info(&output) {
+            (info.logical_size.unwrap().0, info.logical_size.unwrap().1)
+        } else {
+            return;
+        };
+        
+        (self.width, self.height) = self.widget_size.get_dimension(screen_width as u32, screen_height as u32);
+        self.layer.as_mut().unwrap().set_size(self.width.unwrap(), self.height.unwrap());
+        self.layer.as_mut().unwrap().commit();
+        self.pool = Some(SlotPool::new((self.width.unwrap() * self.height.unwrap() * 4).try_into().expect("Too large dimension"), &self.shm).expect("Failed to create pool"));
+        self.need_redraw = true;
     }
 
     fn output_destroyed(
@@ -241,8 +244,8 @@ impl LayerShellHandler for SimpleLayer {
         _serial: u32,
     ) {
         // Initiate the first draw.
-        if self.first_configure {
-            self.first_configure = false;
+        if self.need_redraw {
+            self.need_redraw = false;
             self.draw();
         }
     }
