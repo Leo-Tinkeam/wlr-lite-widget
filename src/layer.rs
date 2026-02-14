@@ -20,10 +20,7 @@ use smithay_client_toolkit::{
     shm::{Shm, ShmHandler, slot::SlotPool},
 };
 use wayland_client::{
-    Connection,
-    globals::registry_queue_init,
-    protocol::{wl_output, wl_pointer, wl_seat, wl_shm, wl_surface},
-    QueueHandle,
+    Connection, QueueHandle, globals::{registry_queue_init}, protocol::{wl_output, wl_pointer, wl_seat, wl_shm, wl_surface}
 };
 
 pub struct Layer {
@@ -78,6 +75,8 @@ impl Layer {
             seat_state: SeatState::new(&globals, &qh),
             output_state: OutputState::new(&globals, &qh),
             shm,
+            compositor: compositor,
+            layer_shell: layer_shell,
 
             exit: false,
             first_configure: true,
@@ -85,7 +84,7 @@ impl Layer {
             width: width,
             height: height,
             clicked: false,
-            layer,
+            layer: Some(layer),
             pointer: None,
 
             render: render,
@@ -106,6 +105,8 @@ struct SimpleLayer {
     seat_state: SeatState,
     output_state: OutputState,
     shm: Shm,
+    compositor: CompositorState,
+    layer_shell: LayerShell,
 
     exit: bool,
     first_configure: bool,
@@ -113,7 +114,7 @@ struct SimpleLayer {
     width: u32,
     height: u32,
     clicked: bool,
-    layer: LayerSurface,
+    layer: Option<LayerSurface>,
     pointer: Option<wl_pointer::WlPointer>,
 
     render: fn(&mut [u8], u32, u32, bool)
@@ -179,19 +180,32 @@ impl OutputHandler for SimpleLayer {
     fn new_output(
         &mut self,
         _conn: &Connection,
-        _qh: &QueueHandle<Self>,
-        _output: wl_output::WlOutput,
+        qh: &QueueHandle<Self>,
+        output: wl_output::WlOutput,
     ) {
-        // TODO: Needed when screen is disconnected (changing TTY and coming back for example)
+        // TODO: Must be a problem with several screen (can't test now) -> main screen should be at location (0, 0) ?
+        // TODO: If we achieve to choose a screen, we may use the wlr-output-management extension that gives zwlr_output_head_v1
+        // TODO: use the right ANCHOR ; layer and name -> May be also use a create_layer() function because this is redundant
+        if self.layer.is_none() {
+            let surface = self.compositor.create_surface(&qh);
+            let new_layer =
+                self.layer_shell.create_layer_surface(&qh, surface, SctkLayer::Top, Some("simple_layer"), Some(&output));
+            new_layer.set_anchor(Anchor::TOP);
+            new_layer.set_size(self.width, self.height);
+            new_layer.commit();
+            self.layer = Some(new_layer);
+            self.first_configure = true;
+        }
+        // TODO: Use new size when we use %
     }
 
     fn update_output(
         &mut self,
         _conn: &Connection,
         _qh: &QueueHandle<Self>,
-        _output: wl_output::WlOutput,
+        output: wl_output::WlOutput,
     ) {
-        if let Some(info) = self.output_state.info(&_output) {
+        if let Some(info) = self.output_state.info(&output) {
             // When the screen is rotated (transform), this goes from 3840x2160 to 2160x3840 (no need to consider it)
             // This is the size after division by scale_factor (no need to consider it)
             println!("infos : size {}x{}", info.logical_size.unwrap().0, info.logical_size.unwrap().1);
@@ -205,7 +219,9 @@ impl OutputHandler for SimpleLayer {
         _qh: &QueueHandle<Self>,
         _output: wl_output::WlOutput,
     ) {
-        // TODO: Needed when screen is disconnected (changing TTY and coming back for example)
+        // TODO: Must be a problem with several screen (can't test now) -> main screen should be at location (0, 0) ?
+        // TODO: If we achieve to choose a screen, we may use the wlr-output-management extension that gives zwlr_output_head_v1
+        self.layer = None;
     }
 }
 
@@ -280,8 +296,9 @@ impl PointerHandler for SimpleLayer {
         use PointerEventKind::*;
         for event in events {
             // Ignore events for other surfaces
-            if &event.surface != self.layer.wl_surface() {
-                continue;
+            match self.layer.clone() {
+                None => continue,
+                Some(layer) => if &event.surface != layer.wl_surface() {continue},
             }
             match event.kind {
                 Enter { .. } => {
@@ -322,6 +339,10 @@ impl ProvidesRegistryState for SimpleLayer {
 
 impl SimpleLayer {
     pub fn draw(&mut self) {
+        let layer = match self.layer.clone() {
+            None => return,
+            Some(layer) => layer,
+        };
         let width = self.width;
         let height = self.height;
         let stride = self.width as i32 * 4;
@@ -332,11 +353,11 @@ impl SimpleLayer {
 
         // Damage the entire window
         // Here we should damage only concerned area
-        self.layer.wl_surface().damage_buffer(0, 0, width as i32, height as i32);
+        layer.wl_surface().damage_buffer(0, 0, width as i32, height as i32);
 
         // Attach and commit to present.
-        buffer.attach_to(self.layer.wl_surface()).expect("buffer attach");
-        self.layer.commit();
+        buffer.attach_to(layer.wl_surface()).expect("buffer attach");
+        layer.commit();
     }
 }
 
