@@ -1,10 +1,15 @@
-use wlr_lite_widget::Layer;
+use wlr_lite_widget::{Layer, WidgetSize, SizeUnit};
 use tiny_skia::{PixmapMut, Color, Paint, Rect, Transform};
 
 fn main() {
     println!("--- Début de l'exemple ---");
 
-    Layer::new((512, 256), render);
+    let widget_size = WidgetSize {
+        width: SizeUnit::Percent(50f32),
+        height: SizeUnit::Percent(20f32),
+    };
+
+    Layer::new(widget_size, render);
 
     println!("--- Fin de l'exemple ---");
 }

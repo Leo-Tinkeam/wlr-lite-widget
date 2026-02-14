@@ -22,14 +22,15 @@ use smithay_client_toolkit::{
 use wayland_client::{
     Connection, QueueHandle, globals::{registry_queue_init}, protocol::{wl_output, wl_pointer, wl_seat, wl_shm, wl_surface}
 };
+use crate::WidgetSize;
 
 pub struct Layer {
 }
 
 impl Layer {
     // TODO: SctkLayer::Top ; Some("simple_layer") ; Anchor::TOP doivent être en entrée
-    // TODO: Width, Height doit être un objet size qui a le droit d'être en pixel ou en pourcentage (chacun des deux indépendamment)
-    pub fn new((width, height): (u32, u32), render: fn(&mut [u8], u32, u32, bool)) {
+    // TODO: Il faut la position de la même façon que size -> Renommer WidgetSize en WidgetBounds
+    pub fn new(widget_size: WidgetSize, render: fn(&mut [u8], u32, u32, bool)) {
         // Connecting to the compositor (server)
         let conn = Connection::connect_to_env().unwrap();
 
@@ -47,27 +48,6 @@ impl Layer {
         // We use wl_shm to allow software rendering to a buffer we share with the compositor process.
         let shm = Shm::bind(&globals, &qh).expect("wl_shm is not available");
 
-        // A layer surface is created from a surface.
-        let surface = compositor.create_surface(&qh);
-
-        // And then we create our layer shell.
-        let layer =
-            layer_shell.create_layer_surface(&qh, surface, SctkLayer::Top, Some("simple_layer"), None);
-
-        // Configure the layer surface with anchor on screen and desired size
-        layer.set_anchor(Anchor::TOP);
-        layer.set_size(width, height);
-
-        // In order for the layer surface to be mapped, we need to perform an initial commit with no attached\
-        // buffer. For more info, see WaylandSurface::commit
-        // The compositor will respond with an initial configure that we can then use to present to the layer
-        // surface with the correct options.
-        layer.commit();
-
-        // We don't know how large the window will be yet, so lets assume the minimum size we suggested for the
-        // initial memory allocation.
-        let pool = SlotPool::new((width * height * 4).try_into().expect("Too large dimension"), &shm).expect("Failed to create pool");
-
         let mut simple_layer = SimpleLayer {
             // Seats and outputs may be hotplugged at runtime, therefore we need to setup a registry state to
             // listen for seats and outputs.
@@ -80,11 +60,12 @@ impl Layer {
 
             exit: false,
             first_configure: true,
-            pool,
-            width: width,
-            height: height,
+            pool: None,
+            widget_size: widget_size,
+            width: None,
+            height: None,
             clicked: false,
-            layer: Some(layer),
+            layer: None,
             pointer: None,
 
             render: render,
@@ -110,9 +91,10 @@ struct SimpleLayer {
 
     exit: bool,
     first_configure: bool,
-    pool: SlotPool,
-    width: u32,
-    height: u32,
+    pool: Option<SlotPool>,
+    widget_size: WidgetSize,
+    width: Option<u32>,
+    height: Option<u32>,
     clicked: bool,
     layer: Option<LayerSurface>,
     pointer: Option<wl_pointer::WlPointer>,
@@ -185,18 +167,38 @@ impl OutputHandler for SimpleLayer {
     ) {
         // TODO: Must be a problem with several screen (can't test now) -> main screen should be at location (0, 0) ?
         // TODO: If we achieve to choose a screen, we may use the wlr-output-management extension that gives zwlr_output_head_v1
-        // TODO: use the right ANCHOR ; layer and name -> May be also use a create_layer() function because this is redundant
+        // TODO: use the right SctkLayer ; ANCHOR and name -> May be also use a create_layer() function because this is redundant
         if self.layer.is_none() {
-            let surface = self.compositor.create_surface(&qh);
-            let new_layer =
-                self.layer_shell.create_layer_surface(&qh, surface, SctkLayer::Top, Some("simple_layer"), Some(&output));
-            new_layer.set_anchor(Anchor::TOP);
-            new_layer.set_size(self.width, self.height);
-            new_layer.commit();
-            self.layer = Some(new_layer);
-            self.first_configure = true;
+            if let Some(info) = self.output_state.info(&output) {
+                // A layer surface is created from a surface.
+                let surface = self.compositor.create_surface(&qh);
+
+                // And then we create our layer shell.
+                let new_layer =
+                    self.layer_shell.create_layer_surface(&qh, surface, SctkLayer::Top, Some("simple_layer"), Some(&output));
+                
+                let (screen_width, screen_height) = (info.logical_size.unwrap().0, info.logical_size.unwrap().1);
+                (self.width, self.height) = self.widget_size.get_dimension(screen_width as u32, screen_height as u32);
+
+                // Configure the layer surface with anchor on screen and desired size
+                new_layer.set_anchor(Anchor::TOP);
+                new_layer.set_size(self.width.unwrap(), self.height.unwrap());
+
+                // In order for the layer surface to be mapped, we need to perform an initial commit with no attached\
+                // buffer. For more info, see WaylandSurface::commit
+                // The compositor will respond with an initial configure that we can then use to present to the layer
+                // surface with the correct options.
+                new_layer.commit();
+
+                // We don't know how large the window will be yet, so lets assume the minimum size we suggested for the
+                // initial memory allocation.
+                self.pool = Some(SlotPool::new((self.width.unwrap() * self.height.unwrap() * 4).try_into().expect("Too large dimension"), &self.shm).expect("Failed to create pool"));
+
+                self.layer = Some(new_layer);
+                self.first_configure = true;
+            }
         }
-        // TODO: Use new size when we use %
+        // TODO: Use new size when we use % -> Pas besoin de le faire au-dessus ?
     }
 
     fn update_output(
@@ -343,10 +345,14 @@ impl SimpleLayer {
             None => return,
             Some(layer) => layer,
         };
-        let width = self.width;
-        let height = self.height;
-        let stride = self.width as i32 * 4;
-        let (buffer, canvas) = self.pool.create_buffer(width as i32, height as i32, stride, wl_shm::Format::Argb8888).expect("Error while creating buffer");
+        let width = self.width.unwrap();
+        let height = self.height.unwrap();
+        let stride = width as i32 * 4;
+        let (buffer, canvas) = self.pool
+            .as_mut()
+            .unwrap()
+            .create_buffer(width as i32, height as i32, stride, wl_shm::Format::Argb8888)
+            .expect("Error while creating buffer");
 
         // Render with the user render function
         (self.render)(canvas, width, height, self.clicked);
