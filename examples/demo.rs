@@ -1,20 +1,17 @@
-use wlr_lite_widget::{Anchor, SizeUnit, Widget, WidgetDetails, WidgetSize};
+use wlr_lite_widget::{SizeUnit, Widget, WidgetPosition, WidgetSize};
 use tiny_skia::{PixmapMut, Color, Paint, Rect, Transform};
 
 fn main() {
     println!("--- Début de l'exemple ---");
+
+    let widget_position = WidgetPosition::Coordinates(SizeUnit::Percent(10f32), SizeUnit::Percent(10f32));
 
     let widget_size = WidgetSize {
         width: SizeUnit::Percent(50f32),
         height: SizeUnit::Percent(20f32),
     };
 
-    let widget_details = WidgetDetails {
-        anchor: Some(Anchor::TOP),
-        ..Default::default()
-    };
-
-    Widget::new(widget_size, "MyWidget".to_string(), Some(widget_details), render);
+    Widget::new(widget_size, widget_position, "MyWidget".to_string(), render, None);
 
     println!("--- Fin de l'exemple ---");
 }

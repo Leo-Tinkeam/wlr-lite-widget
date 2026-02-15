@@ -1,39 +1,11 @@
 mod layer;
+mod settings;
 
 pub use layer::Widget;
+pub use settings::{SizeUnit, WidgetAnchor, WidgetMargin, WidgetPosition, WidgetSize};
 pub use smithay_client_toolkit::shell::wlr_layer::{Anchor, Layer};
 
-#[derive(Default)]
-pub struct WidgetDetails {
-    pub anchor: Option<Anchor>,
-    pub layer: Option<Layer>,
-}
-
-pub enum SizeUnit {
-    Percent(f32),
-    Pixel(u32),
-}
-
-pub struct WidgetSize {
-    pub width: SizeUnit,
-    pub height: SizeUnit,
-}
-
-impl WidgetSize {
-
-    pub fn get_dimension(&mut self, screen_width: u32, screen_height: u32) -> (Option<u32>, Option<u32>) {
-        let width = match self.width {
-            SizeUnit::Percent(percent) => ((screen_width as f32)*percent/100f32) as u32,
-            SizeUnit::Pixel(pixel) => pixel,
-        };
-        let height = match self.height {
-            SizeUnit::Percent(percent) => ((screen_height as f32)*percent/100f32) as u32,
-            SizeUnit::Pixel(pixel) => pixel,
-        };
-        (Some(width), Some(height))
-    }
-
-}
+pub(crate) use settings::Margin;
 
 #[cfg(test)]
 mod tests {

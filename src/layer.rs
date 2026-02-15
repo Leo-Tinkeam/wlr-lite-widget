@@ -22,7 +22,7 @@ use smithay_client_toolkit::{
 use wayland_client::{
     Connection, QueueHandle, globals::{registry_queue_init}, protocol::{wl_output, wl_pointer, wl_seat, wl_shm, wl_surface}
 };
-use crate::{WidgetDetails, WidgetSize};
+use crate::{SizeUnit, WidgetAnchor, Margin, WidgetPosition, WidgetSize};
 
 pub struct Widget {
     registry_state: RegistryState,
@@ -46,11 +46,11 @@ pub struct Widget {
     widget_name: String,
     widget_layer: Layer,
     widget_anchor: Option<Anchor>,
+    margin: Margin,
 }
 
 impl Widget {
-    // TODO: Il faut la position de la même façon que size -> Renommer WidgetSize en WidgetBounds
-    pub fn new(size: WidgetSize, name: String, details: Option<WidgetDetails>, render: fn(&mut [u8], u32, u32, bool)) {
+    pub fn new(size: WidgetSize, position: WidgetPosition, name: String, render: fn(&mut [u8], u32, u32, bool), layer: Option<Layer>) {
         // Connecting to the compositor (server)
         let conn = Connection::connect_to_env().unwrap();
 
@@ -68,7 +68,24 @@ impl Widget {
         // We use wl_shm to allow software rendering to a buffer we share with the compositor process.
         let shm = Shm::bind(&globals, &qh).expect("wl_shm is not available");
 
-        let widget_details = details.unwrap_or_default();
+        let (widget_anchor, margin) = match position {
+            WidgetPosition::Coordinates(x, y) => {(
+                WidgetAnchor::TopLeft.into(),
+                Margin {
+                    top: y,
+                    right: SizeUnit::Pixel(0),
+                    bottom: SizeUnit::Pixel(0),
+                    left: x,
+                }
+            )},
+            WidgetPosition::Anchor(anchor, margin_temp) => {
+                (
+                    anchor.clone().into(),
+                    margin_temp.unwrap_or_default().into_margin(anchor),
+                )
+            }
+        };
+
         let mut widget = Widget {
             // Seats and outputs may be hotplugged at runtime, therefore we need to setup a registry state to
             // listen for seats and outputs.
@@ -91,8 +108,9 @@ impl Widget {
             render: render,
             widget_size: size,
             widget_name: name,
-            widget_layer: widget_details.layer.unwrap_or(Layer::Background),
-            widget_anchor: widget_details.anchor,
+            widget_layer: layer.unwrap_or(Layer::Background),
+            widget_anchor,
+            margin,
         };
 
         // We don't draw immediately, the configure will notify us when to first draw.
@@ -121,7 +139,6 @@ impl Widget {
         // Render with the user render function
         (self.render)(canvas, width, height, self.clicked);
 
-        // Damage the entire window
         // Here we should damage only concerned area
         layer.wl_surface().damage_buffer(0, 0, width as i32, height as i32);
 
@@ -198,20 +215,17 @@ impl OutputHandler for Widget {
         // TODO: If we achieve to choose a screen, we may use the wlr-output-management extension that gives zwlr_output_head_v1
         if self.layer.is_none() {
             if let Some(info) = self.output_state.info(&output) {
-                // A layer surface is created from a surface.
                 let surface = self.compositor.create_surface(&qh);
-
-                // And then we create our layer shell.
                 let new_layer =
                     self.layer_shell.create_layer_surface(&qh, surface, self.widget_layer, Some(self.widget_name.clone()), Some(&output));
                 
-                let (screen_width, screen_height) = (info.logical_size.unwrap().0, info.logical_size.unwrap().1);
-                (self.width, self.height) = self.widget_size.get_dimension(screen_width as u32, screen_height as u32);
-
-                // Configure the layer surface with anchor on screen and desired size
+                let (screen_width, screen_height) = (info.logical_size.unwrap().0 as u32, info.logical_size.unwrap().1 as u32);
                 if let Some(anchor) = self.widget_anchor {
                     new_layer.set_anchor(anchor);
+                    let (top, right, bottom, left) = self.margin.get_margin(screen_width, screen_height);
+                    new_layer.set_margin(top, right, bottom, left);
                 }
+                (self.width, self.height) = self.widget_size.get_dimension(screen_width, screen_height);
                 new_layer.set_size(self.width.unwrap(), self.height.unwrap());
 
                 // In order for the layer surface to be mapped, we need to perform an initial commit with no attached\
@@ -236,13 +250,18 @@ impl OutputHandler for Widget {
         // When the screen is rotated (transform), this goes from 3840x2160 to 2160x3840 (no need to consider it)
         // This is the size after division by scale_factor (no need to consider it)
         let (screen_width, screen_height) = if let Some(info) = self.output_state.info(&output) {
-            (info.logical_size.unwrap().0, info.logical_size.unwrap().1)
+            (info.logical_size.unwrap().0 as u32, info.logical_size.unwrap().1 as u32)
         } else {
             return;
         };
         
-        (self.width, self.height) = self.widget_size.get_dimension(screen_width as u32, screen_height as u32);
+        if self.widget_anchor.is_some() {
+            let (top, right, bottom, left) = self.margin.get_margin(screen_width, screen_height);
+            self.layer.as_mut().unwrap().set_margin(top, right, bottom, left);
+        }
+        (self.width, self.height) = self.widget_size.get_dimension(screen_width, screen_height);
         self.layer.as_mut().unwrap().set_size(self.width.unwrap(), self.height.unwrap());
+
         self.layer.as_mut().unwrap().commit();
         self.pool = Some(SlotPool::new((self.width.unwrap() * self.height.unwrap() * 4).try_into().expect("Too large dimension"), &self.shm).expect("Failed to create pool"));
         self.need_redraw = true;
@@ -273,7 +292,6 @@ impl LayerShellHandler for Widget {
         _configure: LayerSurfaceConfigure,
         _serial: u32,
     ) {
-        // Initiate the first draw.
         if self.need_redraw {
             self.need_redraw = false;
             self.draw();
