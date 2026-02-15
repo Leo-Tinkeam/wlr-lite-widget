@@ -13,7 +13,7 @@ use smithay_client_toolkit::{
     shell::{
         WaylandSurface,
         wlr_layer::{
-            Anchor, Layer as SctkLayer, LayerShell,
+            Anchor, Layer, LayerShell,
             LayerShellHandler, LayerSurface,LayerSurfaceConfigure,
         },
     },
@@ -22,15 +22,35 @@ use smithay_client_toolkit::{
 use wayland_client::{
     Connection, QueueHandle, globals::{registry_queue_init}, protocol::{wl_output, wl_pointer, wl_seat, wl_shm, wl_surface}
 };
-use crate::WidgetSize;
+use crate::{WidgetDetails, WidgetSize};
 
-pub struct Layer {
+pub struct Widget {
+    registry_state: RegistryState,
+    seat_state: SeatState,
+    output_state: OutputState,
+    shm: Shm,
+    compositor: CompositorState,
+    layer_shell: LayerShell,
+
+    exit: bool,
+    need_redraw: bool,
+    pool: Option<SlotPool>,
+    width: Option<u32>,
+    height: Option<u32>,
+    clicked: bool,
+    layer: Option<LayerSurface>,
+    pointer: Option<wl_pointer::WlPointer>,
+
+    render: fn(&mut [u8], u32, u32, bool),
+    widget_size: WidgetSize,
+    widget_name: String,
+    widget_layer: Layer,
+    widget_anchor: Option<Anchor>,
 }
 
-impl Layer {
-    // TODO: SctkLayer::Top ; Some("simple_layer") ; Anchor::TOP doivent être en entrée
+impl Widget {
     // TODO: Il faut la position de la même façon que size -> Renommer WidgetSize en WidgetBounds
-    pub fn new(widget_size: WidgetSize, render: fn(&mut [u8], u32, u32, bool)) {
+    pub fn new(size: WidgetSize, name: String, details: Option<WidgetDetails>, render: fn(&mut [u8], u32, u32, bool)) {
         // Connecting to the compositor (server)
         let conn = Connection::connect_to_env().unwrap();
 
@@ -48,7 +68,8 @@ impl Layer {
         // We use wl_shm to allow software rendering to a buffer we share with the compositor process.
         let shm = Shm::bind(&globals, &qh).expect("wl_shm is not available");
 
-        let mut simple_layer = SimpleLayer {
+        let widget_details = details.unwrap_or_default();
+        let mut widget = Widget {
             // Seats and outputs may be hotplugged at runtime, therefore we need to setup a registry state to
             // listen for seats and outputs.
             registry_state: RegistryState::new(&globals),
@@ -61,7 +82,6 @@ impl Layer {
             exit: false,
             need_redraw: true,
             pool: None,
-            widget_size: widget_size,
             width: None,
             height: None,
             clicked: false,
@@ -69,40 +89,49 @@ impl Layer {
             pointer: None,
 
             render: render,
+            widget_size: size,
+            widget_name: name,
+            widget_layer: widget_details.layer.unwrap_or(Layer::Background),
+            widget_anchor: widget_details.anchor,
         };
 
         // We don't draw immediately, the configure will notify us when to first draw.
         loop {
-            event_queue.blocking_dispatch(&mut simple_layer).unwrap();
-            if simple_layer.exit {
+            event_queue.blocking_dispatch(&mut widget).unwrap();
+            if widget.exit {
                 break;
             }
         }
     }
+
+    pub fn draw(&mut self) {
+        let layer = match self.layer.clone() {
+            None => return,
+            Some(layer) => layer,
+        };
+        let width = self.width.unwrap();
+        let height = self.height.unwrap();
+        let stride = width as i32 * 4;
+        let (buffer, canvas) = self.pool
+            .as_mut()
+            .unwrap()
+            .create_buffer(width as i32, height as i32, stride, wl_shm::Format::Argb8888)
+            .expect("Error while creating buffer");
+
+        // Render with the user render function
+        (self.render)(canvas, width, height, self.clicked);
+
+        // Damage the entire window
+        // Here we should damage only concerned area
+        layer.wl_surface().damage_buffer(0, 0, width as i32, height as i32);
+
+        // Attach and commit to present.
+        buffer.attach_to(layer.wl_surface()).expect("buffer attach");
+        layer.commit();
+    }
 }
 
-struct SimpleLayer {
-    registry_state: RegistryState,
-    seat_state: SeatState,
-    output_state: OutputState,
-    shm: Shm,
-    compositor: CompositorState,
-    layer_shell: LayerShell,
-
-    exit: bool,
-    need_redraw: bool,
-    pool: Option<SlotPool>,
-    widget_size: WidgetSize,
-    width: Option<u32>,
-    height: Option<u32>,
-    clicked: bool,
-    layer: Option<LayerSurface>,
-    pointer: Option<wl_pointer::WlPointer>,
-
-    render: fn(&mut [u8], u32, u32, bool)
-}
-
-impl CompositorHandler for SimpleLayer {
+impl CompositorHandler for Widget {
     fn scale_factor_changed(
         &mut self,
         _conn: &Connection,
@@ -154,7 +183,7 @@ impl CompositorHandler for SimpleLayer {
     }
 }
 
-impl OutputHandler for SimpleLayer {
+impl OutputHandler for Widget {
     fn output_state(&mut self) -> &mut OutputState {
         &mut self.output_state
     }
@@ -167,7 +196,6 @@ impl OutputHandler for SimpleLayer {
     ) {
         // TODO: Must be a problem with several screen (can't test now) -> main screen should be at location (0, 0) ?
         // TODO: If we achieve to choose a screen, we may use the wlr-output-management extension that gives zwlr_output_head_v1
-        // TODO: use the right SctkLayer ; ANCHOR and name -> May be also use a create_layer() function because this is redundant
         if self.layer.is_none() {
             if let Some(info) = self.output_state.info(&output) {
                 // A layer surface is created from a surface.
@@ -175,13 +203,15 @@ impl OutputHandler for SimpleLayer {
 
                 // And then we create our layer shell.
                 let new_layer =
-                    self.layer_shell.create_layer_surface(&qh, surface, SctkLayer::Top, Some("simple_layer"), Some(&output));
+                    self.layer_shell.create_layer_surface(&qh, surface, self.widget_layer, Some(self.widget_name.clone()), Some(&output));
                 
                 let (screen_width, screen_height) = (info.logical_size.unwrap().0, info.logical_size.unwrap().1);
                 (self.width, self.height) = self.widget_size.get_dimension(screen_width as u32, screen_height as u32);
 
                 // Configure the layer surface with anchor on screen and desired size
-                new_layer.set_anchor(Anchor::TOP);
+                if let Some(anchor) = self.widget_anchor {
+                    new_layer.set_anchor(anchor);
+                }
                 new_layer.set_size(self.width.unwrap(), self.height.unwrap());
 
                 // In order for the layer surface to be mapped, we need to perform an initial commit with no attached\
@@ -230,7 +260,7 @@ impl OutputHandler for SimpleLayer {
     }
 }
 
-impl LayerShellHandler for SimpleLayer {
+impl LayerShellHandler for Widget {
     fn closed(&mut self, _conn: &Connection, _qh: &QueueHandle<Self>, _layer: &LayerSurface) {
         self.exit = true;
     }
@@ -251,7 +281,7 @@ impl LayerShellHandler for SimpleLayer {
     }
 }
 
-impl SeatHandler for SimpleLayer {
+impl SeatHandler for Widget {
     fn seat_state(&mut self) -> &mut SeatState {
         &mut self.seat_state
     }
@@ -290,7 +320,7 @@ impl SeatHandler for SimpleLayer {
     }
 }
 
-impl PointerHandler for SimpleLayer {
+impl PointerHandler for Widget {
     fn pointer_frame(
         &mut self,
         _conn: &Connection,
@@ -329,51 +359,23 @@ impl PointerHandler for SimpleLayer {
     }
 }
 
-impl ShmHandler for SimpleLayer {
+impl ShmHandler for Widget {
     fn shm_state(&mut self) -> &mut Shm {
         &mut self.shm
     }
 }
 
-impl ProvidesRegistryState for SimpleLayer {
+impl ProvidesRegistryState for Widget {
     fn registry(&mut self) -> &mut RegistryState {
         &mut self.registry_state
     }
     registry_handlers![OutputState, SeatState];
 }
 
-impl SimpleLayer {
-    pub fn draw(&mut self) {
-        let layer = match self.layer.clone() {
-            None => return,
-            Some(layer) => layer,
-        };
-        let width = self.width.unwrap();
-        let height = self.height.unwrap();
-        let stride = width as i32 * 4;
-        let (buffer, canvas) = self.pool
-            .as_mut()
-            .unwrap()
-            .create_buffer(width as i32, height as i32, stride, wl_shm::Format::Argb8888)
-            .expect("Error while creating buffer");
-
-        // Render with the user render function
-        (self.render)(canvas, width, height, self.clicked);
-
-        // Damage the entire window
-        // Here we should damage only concerned area
-        layer.wl_surface().damage_buffer(0, 0, width as i32, height as i32);
-
-        // Attach and commit to present.
-        buffer.attach_to(layer.wl_surface()).expect("buffer attach");
-        layer.commit();
-    }
-}
-
-delegate_compositor!(SimpleLayer);
-delegate_output!(SimpleLayer);
-delegate_shm!(SimpleLayer);
-delegate_seat!(SimpleLayer);
-delegate_pointer!(SimpleLayer);
-delegate_layer!(SimpleLayer);
-delegate_registry!(SimpleLayer);
+delegate_compositor!(Widget);
+delegate_output!(Widget);
+delegate_shm!(Widget);
+delegate_seat!(Widget);
+delegate_pointer!(Widget);
+delegate_layer!(Widget);
+delegate_registry!(Widget);

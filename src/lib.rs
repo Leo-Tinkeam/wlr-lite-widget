@@ -1,6 +1,13 @@
 mod layer;
 
-pub use layer::Layer;
+pub use layer::Widget;
+pub use smithay_client_toolkit::shell::wlr_layer::{Anchor, Layer};
+
+#[derive(Default)]
+pub struct WidgetDetails {
+    pub anchor: Option<Anchor>,
+    pub layer: Option<Layer>,
+}
 
 pub enum SizeUnit {
     Percent(f32),

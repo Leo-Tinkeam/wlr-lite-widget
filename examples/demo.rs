@@ -1,4 +1,4 @@
-use wlr_lite_widget::{Layer, WidgetSize, SizeUnit};
+use wlr_lite_widget::{Anchor, SizeUnit, Widget, WidgetDetails, WidgetSize};
 use tiny_skia::{PixmapMut, Color, Paint, Rect, Transform};
 
 fn main() {
@@ -9,7 +9,12 @@ fn main() {
         height: SizeUnit::Percent(20f32),
     };
 
-    Layer::new(widget_size, render);
+    let widget_details = WidgetDetails {
+        anchor: Some(Anchor::TOP),
+        ..Default::default()
+    };
+
+    Widget::new(widget_size, "MyWidget".to_string(), Some(widget_details), render);
 
     println!("--- Fin de l'exemple ---");
 }
