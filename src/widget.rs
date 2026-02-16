@@ -19,12 +19,48 @@ use smithay_client_toolkit::{
     },
     shm::{Shm, ShmHandler, slot::SlotPool},
 };
+use std::{sync::{Arc, Mutex}, thread, time::Duration};
 use wayland_client::{
-    Connection, QueueHandle, globals::{registry_queue_init}, protocol::{wl_output, wl_pointer, wl_seat, wl_shm, wl_surface}
+    Connection, QueueHandle, globals::registry_queue_init, protocol::{wl_output, wl_pointer, wl_seat, wl_shm, wl_surface}
 };
-use crate::{SizeUnit, WidgetAnchor, Margin, WidgetPosition, WidgetSize};
+use crate::{SizeUnit, Surface, WidgetAnchor, Margin, WidgetPosition, WidgetSize};
 
 pub struct Widget {
+    shared_widget: Arc<Mutex<SharedWidget>>,
+}
+
+impl Widget {
+    pub fn new(size: WidgetSize, position: WidgetPosition, name: String, layer: Option<Layer>) -> Self {
+        WidgetState::create(size, position, name, layer)
+    }
+
+    pub fn add_surface(&mut self, surface: Surface) {
+        let mut shared_widget = self.shared_widget.lock().unwrap();
+        shared_widget.surfaces.push(surface);
+    }
+
+    pub fn run(&self) {
+        // TODO: this is allowing only one widget to be displayed, everithing should be good to allow several widget
+        // TODO: so we need a container with a Vec<Widget> that run them all
+        loop {
+            {
+                let shared_widget = self.shared_widget.lock().unwrap();
+                if shared_widget.exit {
+                    break;
+                }
+            }
+            thread::sleep(Duration::from_millis(1));
+        }
+    }
+}
+
+struct SharedWidget {
+    exit: bool, 
+    surfaces: Vec<Surface>,
+    //buttons: Vec<Button>, // TODO
+}
+
+struct WidgetState {
     registry_state: RegistryState,
     seat_state: SeatState,
     output_state: OutputState,
@@ -32,7 +68,6 @@ pub struct Widget {
     compositor: CompositorState,
     layer_shell: LayerShell,
 
-    exit: bool,
     need_redraw: bool,
     pool: Option<SlotPool>,
     width: Option<u32>,
@@ -41,16 +76,17 @@ pub struct Widget {
     layer: Option<LayerSurface>,
     pointer: Option<wl_pointer::WlPointer>,
 
-    render: fn(&mut [u8], u32, u32, bool),
     widget_size: WidgetSize,
     widget_name: String,
     widget_layer: Layer,
     widget_anchor: Option<Anchor>,
     margin: Margin,
+
+    shared_widget: Arc<Mutex<SharedWidget>>,
 }
 
-impl Widget {
-    pub fn new(size: WidgetSize, position: WidgetPosition, name: String, render: fn(&mut [u8], u32, u32, bool), layer: Option<Layer>) {
+impl WidgetState {
+    fn create(size: WidgetSize, position: WidgetPosition, name: String, layer: Option<Layer>) -> Widget {
         // Connecting to the compositor (server)
         let conn = Connection::connect_to_env().unwrap();
 
@@ -86,7 +122,12 @@ impl Widget {
             }
         };
 
-        let mut widget = Widget {
+        let shared_widget = Arc::new(Mutex::new(SharedWidget {
+            exit: false,
+            surfaces: vec![],
+        }));
+
+        let mut widget_state = WidgetState {
             // Seats and outputs may be hotplugged at runtime, therefore we need to setup a registry state to
             // listen for seats and outputs.
             registry_state: RegistryState::new(&globals),
@@ -96,7 +137,6 @@ impl Widget {
             compositor: compositor,
             layer_shell: layer_shell,
 
-            exit: false,
             need_redraw: true,
             pool: None,
             width: None,
@@ -105,20 +145,29 @@ impl Widget {
             layer: None,
             pointer: None,
 
-            render: render,
             widget_size: size,
             widget_name: name,
             widget_layer: layer.unwrap_or(Layer::Background),
             widget_anchor,
             margin,
+
+            shared_widget: Arc::clone(&shared_widget),
         };
 
-        // We don't draw immediately, the configure will notify us when to first draw.
-        loop {
-            event_queue.blocking_dispatch(&mut widget).unwrap();
-            if widget.exit {
-                break;
+        thread::spawn(move || {
+            loop {
+                event_queue.blocking_dispatch(&mut widget_state).unwrap();
+                {
+                    let shared_widget = widget_state.shared_widget.lock().unwrap();
+                    if shared_widget.exit {
+                        break;
+                    }
+                }
             }
+        });
+
+        Widget {
+            shared_widget: shared_widget,
         }
     }
 
@@ -136,11 +185,20 @@ impl Widget {
             .create_buffer(width as i32, height as i32, stride, wl_shm::Format::Argb8888)
             .expect("Error while creating buffer");
 
-        // Render with the user render function
-        (self.render)(canvas, width, height, self.clicked);
+        {
+            // Protected access to shared_widget for the duration of this block
+            let mut shared_widget = self.shared_widget.lock().unwrap();
 
-        // Here we should damage only concerned area
-        layer.wl_surface().damage_buffer(0, 0, width as i32, height as i32);
+            // Render with the user render function
+            shared_widget.surfaces.sort_by_key(|s| s.id); // TODO: only call this when to_front_of is call on a Surface ?
+            for surface in &shared_widget.surfaces {
+                let (surface_width, surface_height) = surface.size.get_dimension(width, height);
+                (surface.render)(canvas, surface_width.unwrap(), surface_height.unwrap(), self.clicked); // TODO: Use the position and size of the Surface
+
+                let (x, y) = surface.position.get_coordinates(width, height, (surface_width.unwrap(), surface_height.unwrap()));
+                layer.wl_surface().damage_buffer(x, y, surface_width.unwrap() as i32, surface_height.unwrap() as i32); // TODO: should damage (and redraw) only when something change (and save that we have applied that change into the Surface)
+            }
+        }
 
         // Attach and commit to present.
         buffer.attach_to(layer.wl_surface()).expect("buffer attach");
@@ -148,7 +206,7 @@ impl Widget {
     }
 }
 
-impl CompositorHandler for Widget {
+impl CompositorHandler for WidgetState {
     fn scale_factor_changed(
         &mut self,
         _conn: &Connection,
@@ -200,7 +258,7 @@ impl CompositorHandler for Widget {
     }
 }
 
-impl OutputHandler for Widget {
+impl OutputHandler for WidgetState {
     fn output_state(&mut self) -> &mut OutputState {
         &mut self.output_state
     }
@@ -279,9 +337,10 @@ impl OutputHandler for Widget {
     }
 }
 
-impl LayerShellHandler for Widget {
+impl LayerShellHandler for WidgetState {
     fn closed(&mut self, _conn: &Connection, _qh: &QueueHandle<Self>, _layer: &LayerSurface) {
-        self.exit = true;
+        let mut shared_widget = self.shared_widget.lock().unwrap();
+        shared_widget.exit = true;
     }
 
     fn configure(
@@ -299,7 +358,7 @@ impl LayerShellHandler for Widget {
     }
 }
 
-impl SeatHandler for Widget {
+impl SeatHandler for WidgetState {
     fn seat_state(&mut self) -> &mut SeatState {
         &mut self.seat_state
     }
@@ -338,7 +397,7 @@ impl SeatHandler for Widget {
     }
 }
 
-impl PointerHandler for Widget {
+impl PointerHandler for WidgetState {
     fn pointer_frame(
         &mut self,
         _conn: &Connection,
@@ -377,23 +436,23 @@ impl PointerHandler for Widget {
     }
 }
 
-impl ShmHandler for Widget {
+impl ShmHandler for WidgetState {
     fn shm_state(&mut self) -> &mut Shm {
         &mut self.shm
     }
 }
 
-impl ProvidesRegistryState for Widget {
+impl ProvidesRegistryState for WidgetState {
     fn registry(&mut self) -> &mut RegistryState {
         &mut self.registry_state
     }
     registry_handlers![OutputState, SeatState];
 }
 
-delegate_compositor!(Widget);
-delegate_output!(Widget);
-delegate_shm!(Widget);
-delegate_seat!(Widget);
-delegate_pointer!(Widget);
-delegate_layer!(Widget);
-delegate_registry!(Widget);
+delegate_compositor!(WidgetState);
+delegate_output!(WidgetState);
+delegate_shm!(WidgetState);
+delegate_seat!(WidgetState);
+delegate_pointer!(WidgetState);
+delegate_layer!(WidgetState);
+delegate_registry!(WidgetState);
