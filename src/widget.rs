@@ -21,7 +21,7 @@ use smithay_client_toolkit::{
 };
 use std::{sync::{Arc, Mutex, Condvar}, thread};
 use wayland_client::{
-    Connection, QueueHandle, globals::registry_queue_init, protocol::{wl_output, wl_pointer, wl_seat, wl_shm, wl_surface}
+    Connection, Dispatch, QueueHandle, globals::registry_queue_init, protocol::{wl_callback, wl_output, wl_pointer, wl_seat, wl_shm, wl_surface}
 };
 use crate::{SizeUnit, Surface, WidgetAnchor, Margin, WidgetPosition, WidgetSize};
 
@@ -78,6 +78,7 @@ struct WidgetState {
     width: Option<u32>,
     height: Option<u32>,
     clicked: bool,
+    frame_asked: bool,
     layer: Option<LayerSurface>,
     pointer: Option<wl_pointer::WlPointer>,
 
@@ -150,6 +151,7 @@ impl WidgetState {
             width: None,
             height: None,
             clicked: false,
+            frame_asked: false,
             layer: None,
             pointer: None,
 
@@ -211,6 +213,16 @@ impl WidgetState {
         // Attach and commit to present.
         buffer.attach_to(layer.wl_surface()).expect("buffer attach");
         layer.commit();
+    }
+
+    fn ask_redraw(&mut self, qh: &QueueHandle<Self>) {
+        if !self.frame_asked {
+            if let Some(layer) = self.layer.as_mut() {
+                layer.wl_surface().frame(qh, FrameRequest::Redraw);
+                layer.wl_surface().commit();
+                self.frame_asked = true;
+            }
+        }
     }
 }
 
@@ -409,7 +421,7 @@ impl PointerHandler for WidgetState {
     fn pointer_frame(
         &mut self,
         _conn: &Connection,
-        _qh: &QueueHandle<Self>,
+        qh: &QueueHandle<Self>,
         _pointer: &wl_pointer::WlPointer,
         events: &[PointerEvent],
     ) {
@@ -431,13 +443,37 @@ impl PointerHandler for WidgetState {
                 Press { button, .. } => {
                     println!("Press {:x} @ {:?}", button, event.position);
                     self.clicked = !self.clicked;
-                    self.draw();
+                    self.ask_redraw(qh);
                 }
                 Release { button, .. } => {
                     println!("Release {:x} @ {:?}", button, event.position);
                 }
                 Axis { horizontal, vertical, .. } => {
                     println!("Scroll H:{horizontal:?}, V:{vertical:?}");
+                }
+            }
+        }
+    }
+}
+
+enum FrameRequest {
+    Redraw,
+}
+
+impl Dispatch<wl_callback::WlCallback, FrameRequest> for WidgetState {
+    fn event(
+        widget_state: &mut Self,
+        _cb: &wl_callback::WlCallback,
+        event: wl_callback::Event,
+        data: &FrameRequest,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+    ) {
+        if let wl_callback::Event::Done { .. } = event {
+            match data {
+                FrameRequest::Redraw => {
+                    widget_state.draw();
+                    widget_state.frame_asked = false;
                 }
             }
         }

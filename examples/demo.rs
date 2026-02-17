@@ -67,7 +67,7 @@ fn render(canvas: &mut [u8], width: u32, height: u32, clicked: bool) { // TODO: 
     paint.set_color(color);
     // paint.anti_alias = true; // Pas utile pour un rectangle droit, mais utile pour des cercles ou formes avancées
 
-    println!("Drawing!");
+    println!("Drawing 1!");
     // 3. Dessin du rectangle
     if let Some(rect) = Rect::from_xywh(0.0, 0.0, width as f32, height as f32) {
         // Transform::identity() veut dire "pas de rotation/zoom"
@@ -100,7 +100,7 @@ fn render2(canvas: &mut [u8], width: u32, height: u32, clicked: bool) { // TODO:
     paint.set_color(color);
     // paint.anti_alias = true; // Pas utile pour un rectangle droit, mais utile pour des cercles ou formes avancées
 
-    println!("Drawing!");
+    println!("Drawing 2!");
     // 3. Dessin du rectangle
     if let Some(rect) = Rect::from_xywh(0.0, 0.0, width as f32, height as f32) {
         // Transform::identity() veut dire "pas de rotation/zoom"
