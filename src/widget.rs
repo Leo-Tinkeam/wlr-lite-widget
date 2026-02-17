@@ -19,14 +19,14 @@ use smithay_client_toolkit::{
     },
     shm::{Shm, ShmHandler, slot::SlotPool},
 };
-use std::{sync::{Arc, Mutex}, thread, time::Duration};
+use std::{sync::{Arc, Mutex, Condvar}, thread};
 use wayland_client::{
     Connection, QueueHandle, globals::registry_queue_init, protocol::{wl_output, wl_pointer, wl_seat, wl_shm, wl_surface}
 };
 use crate::{SizeUnit, Surface, WidgetAnchor, Margin, WidgetPosition, WidgetSize};
 
 pub struct Widget {
-    shared_widget: Arc<Mutex<SharedWidget>>,
+    shared_widget: Arc<(Mutex<SharedWidget>, Condvar)>,
 }
 
 impl Widget {
@@ -35,22 +35,27 @@ impl Widget {
     }
 
     pub fn add_surface(&mut self, surface: Surface) {
-        let mut shared_widget = self.shared_widget.lock().unwrap();
+        let mut shared_widget = self.shared_widget.0.lock().unwrap();
         shared_widget.surfaces.push(surface);
     }
 
     pub fn run(&self) {
         // TODO: this is allowing only one widget to be displayed, everithing should be good to allow several widget
         // TODO: so we need a container with a Vec<Widget> that run them all
-        loop {
-            {
-                let shared_widget = self.shared_widget.lock().unwrap();
-                if shared_widget.exit {
-                    break;
-                }
-            }
-            thread::sleep(Duration::from_millis(1));
+        let (lock, cvar) = self.shared_widget.as_ref();
+        let mut shared_widget = lock.lock().unwrap();
+        while !shared_widget.exit {
+            // cvar.wait() is unlocking the .lock() above while waiting
+            shared_widget = cvar.wait(shared_widget).unwrap();
         }
+    }
+
+    pub fn is_running(&self) -> bool {
+        let shared_widget = self.shared_widget.0.lock().unwrap();
+        if shared_widget.exit {
+            return false;
+        }
+        true
     }
 }
 
@@ -82,7 +87,7 @@ struct WidgetState {
     widget_anchor: Option<Anchor>,
     margin: Margin,
 
-    shared_widget: Arc<Mutex<SharedWidget>>,
+    shared_widget: Arc<(Mutex<SharedWidget>, Condvar)>,
 }
 
 impl WidgetState {
@@ -122,10 +127,13 @@ impl WidgetState {
             }
         };
 
-        let shared_widget = Arc::new(Mutex::new(SharedWidget {
-            exit: false,
-            surfaces: vec![],
-        }));
+        let shared_widget = Arc::new((
+            Mutex::new(SharedWidget {
+                exit: false,
+                surfaces: vec![],
+            }),
+            Condvar::new(),
+        ));
 
         let mut widget_state = WidgetState {
             // Seats and outputs may be hotplugged at runtime, therefore we need to setup a registry state to
@@ -158,7 +166,7 @@ impl WidgetState {
             loop {
                 event_queue.blocking_dispatch(&mut widget_state).unwrap();
                 {
-                    let shared_widget = widget_state.shared_widget.lock().unwrap();
+                    let shared_widget = widget_state.shared_widget.0.lock().unwrap();
                     if shared_widget.exit {
                         break;
                     }
@@ -187,7 +195,7 @@ impl WidgetState {
 
         {
             // Protected access to shared_widget for the duration of this block
-            let mut shared_widget = self.shared_widget.lock().unwrap();
+            let mut shared_widget = self.shared_widget.0.lock().unwrap();
 
             // Render with the user render function
             shared_widget.surfaces.sort_by_key(|s| s.id); // TODO: only call this when to_front_of is call on a Surface ?
@@ -339,7 +347,7 @@ impl OutputHandler for WidgetState {
 
 impl LayerShellHandler for WidgetState {
     fn closed(&mut self, _conn: &Connection, _qh: &QueueHandle<Self>, _layer: &LayerSurface) {
-        let mut shared_widget = self.shared_widget.lock().unwrap();
+        let mut shared_widget = self.shared_widget.0.lock().unwrap();
         shared_widget.exit = true;
     }
 
