@@ -19,7 +19,7 @@ use smithay_client_toolkit::{
     },
     shm::{Shm, ShmHandler, slot::SlotPool},
 };
-use std::{sync::{Arc, Mutex, Condvar}, thread};
+use std::{sync::{Arc, Condvar, Mutex, mpsc::{Receiver, Sender, channel}}, thread};
 use wayland_client::{
     Connection, Dispatch, QueueHandle, globals::registry_queue_init, protocol::{wl_callback, wl_output, wl_pointer, wl_seat, wl_shm, wl_surface}
 };
@@ -34,8 +34,9 @@ impl Widget {
         WidgetState::create(size, position, name, layer)
     }
 
-    pub fn add_surface(&mut self, surface: Surface) {
+    pub fn add_surface(&mut self, mut surface: Surface) {
         let mut shared_widget = self.shared_widget.0.lock().unwrap();
+        surface.event_sender = Some(shared_widget.event_sender.clone());
         shared_widget.surfaces.push(surface);
     }
 
@@ -63,6 +64,26 @@ struct SharedWidget {
     exit: bool, 
     surfaces: Vec<Surface>,
     //buttons: Vec<Button>, // TODO
+    event_sender: Sender<WidgetEvent>,
+    frame_asked: bool,
+    wl_surface: Option<wl_surface::WlSurface>
+}
+
+impl SharedWidget {
+    fn ask_redraw(&mut self, qh: &QueueHandle<WidgetState>) {
+        if !self.frame_asked {
+            if let Some(surface) = self.wl_surface.as_mut() {
+                surface.frame(qh, FrameRequest::Redraw);
+                surface.commit();
+                self.frame_asked = true;
+            }
+        }
+    }
+}
+
+pub(crate) enum WidgetEvent {
+    Redraw,
+    Exit,
 }
 
 struct WidgetState {
@@ -78,7 +99,6 @@ struct WidgetState {
     width: Option<u32>,
     height: Option<u32>,
     clicked: bool,
-    frame_asked: bool,
     layer: Option<LayerSurface>,
     pointer: Option<wl_pointer::WlPointer>,
 
@@ -98,7 +118,7 @@ impl WidgetState {
 
         // Enumerate the list of globals to get the protocols the server implements.
         let (globals, mut event_queue) = registry_queue_init(&conn).unwrap();
-        let qh = event_queue.handle();
+        let qh: QueueHandle<WidgetState> = event_queue.handle();
 
         // The compositor (not to be confused with the server which is commonly called the compositor) allows
         // configuring surfaces to be presented.
@@ -128,10 +148,14 @@ impl WidgetState {
             }
         };
 
+        let (tx, rx): (Sender<WidgetEvent>, Receiver<WidgetEvent>) = channel();
         let shared_widget = Arc::new((
             Mutex::new(SharedWidget {
                 exit: false,
                 surfaces: vec![],
+                event_sender: tx,
+                frame_asked: false,
+                wl_surface: None,
             }),
             Condvar::new(),
         ));
@@ -151,7 +175,7 @@ impl WidgetState {
             width: None,
             height: None,
             clicked: false,
-            frame_asked: false,
+            
             layer: None,
             pointer: None,
 
@@ -172,6 +196,18 @@ impl WidgetState {
                     if shared_widget.exit {
                         break;
                     }
+                }
+            }
+        });
+
+        let shared_widget_clone = Arc::clone(&shared_widget);
+        thread::spawn(move || {
+            while let Ok(event) = rx.try_recv() {
+                match event {
+                    WidgetEvent::Exit => return,
+                    WidgetEvent::Redraw => {
+                        shared_widget_clone.0.lock().unwrap().ask_redraw(&qh);
+                    },
                 }
             }
         });
@@ -202,6 +238,7 @@ impl WidgetState {
             // Render with the user render function
             shared_widget.surfaces.sort_by_key(|s| s.id); // TODO: only call this when to_front_of is call on a Surface ?
             for surface in &shared_widget.surfaces {
+                // TODO: surfaces without "need_redraw" do not need redraw if they are not above a redrawed surface
                 let (surface_width, surface_height) = surface.size.get_dimension(width, height);
                 (surface.render)(canvas, surface_width.unwrap(), surface_height.unwrap(), self.clicked); // TODO: Use the position and size of the Surface
 
@@ -213,16 +250,6 @@ impl WidgetState {
         // Attach and commit to present.
         buffer.attach_to(layer.wl_surface()).expect("buffer attach");
         layer.commit();
-    }
-
-    fn ask_redraw(&mut self, qh: &QueueHandle<Self>) {
-        if !self.frame_asked {
-            if let Some(layer) = self.layer.as_mut() {
-                layer.wl_surface().frame(qh, FrameRequest::Redraw);
-                layer.wl_surface().commit();
-                self.frame_asked = true;
-            }
-        }
     }
 }
 
@@ -295,7 +322,7 @@ impl OutputHandler for WidgetState {
             if let Some(info) = self.output_state.info(&output) {
                 let surface = self.compositor.create_surface(&qh);
                 let new_layer =
-                    self.layer_shell.create_layer_surface(&qh, surface, self.widget_layer, Some(self.widget_name.clone()), Some(&output));
+                    self.layer_shell.create_layer_surface(&qh, surface.clone(), self.widget_layer, Some(self.widget_name.clone()), Some(&output));
                 
                 let (screen_width, screen_height) = (info.logical_size.unwrap().0 as u32, info.logical_size.unwrap().1 as u32);
                 if let Some(anchor) = self.widget_anchor {
@@ -314,6 +341,11 @@ impl OutputHandler for WidgetState {
 
                 self.pool = Some(SlotPool::new((self.width.unwrap() * self.height.unwrap() * 4).try_into().expect("Too large dimension"), &self.shm).expect("Failed to create pool"));
                 self.layer = Some(new_layer);
+                {
+                    let (lock, _) = self.shared_widget.as_ref();
+                    let mut shared_widget = lock.lock().unwrap();
+                    shared_widget.wl_surface = Some(surface);
+                }
                 self.need_redraw = true;
             }
         }
@@ -360,6 +392,9 @@ impl OutputHandler for WidgetState {
 impl LayerShellHandler for WidgetState {
     fn closed(&mut self, _conn: &Connection, _qh: &QueueHandle<Self>, _layer: &LayerSurface) {
         let mut shared_widget = self.shared_widget.0.lock().unwrap();
+        if shared_widget.event_sender.send(WidgetEvent::Exit).is_err() {
+            println!("Error: exit not sent");
+        }
         shared_widget.exit = true;
     }
 
@@ -443,7 +478,11 @@ impl PointerHandler for WidgetState {
                 Press { button, .. } => {
                     println!("Press {:x} @ {:?}", button, event.position);
                     self.clicked = !self.clicked;
-                    self.ask_redraw(qh);
+                    {
+                        let (lock, _) = self.shared_widget.as_ref();
+                        let mut shared_widget = lock.lock().unwrap();
+                        shared_widget.ask_redraw(qh);
+                    }
                 }
                 Release { button, .. } => {
                     println!("Release {:x} @ {:?}", button, event.position);
@@ -473,7 +512,11 @@ impl Dispatch<wl_callback::WlCallback, FrameRequest> for WidgetState {
             match data {
                 FrameRequest::Redraw => {
                     widget_state.draw();
-                    widget_state.frame_asked = false;
+                    {
+                        let (lock, _) = widget_state.shared_widget.as_ref();
+                        let mut shared_widget = lock.lock().unwrap();
+                        shared_widget.frame_asked = false;
+                    }
                 }
             }
         }
