@@ -1,7 +1,9 @@
 use wlr_lite_widget::{SizeUnit, Surface, Widget, WidgetPosition, WidgetSize};
 use tiny_skia::{PixmapMut, Color, Paint, Rect, Transform};
+use std::thread;
+use std::time::Duration;
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct MyStruct {
     clicked: bool,
 }
@@ -42,6 +44,20 @@ fn main() {
 
     widget.add_surface(surface);
     widget.add_surface(surface2);
+
+    let thread_widget = widget.clone();
+    thread::spawn(move || {
+        let mut my_state = MyStruct { clicked: true };
+        loop {
+            my_state.clicked = !my_state.clicked;
+            thread_widget.update_app_state(my_state.clone());
+            thread_widget.redraw();
+            thread::sleep(Duration::from_secs(1));
+            if !thread_widget.is_running() {
+                break;
+            }
+        }
+    });
 
     widget.run();
 

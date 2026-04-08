@@ -25,6 +25,7 @@ use wayland_client::{
 };
 use crate::{SizeUnit, Surface, WidgetAnchor, Margin, WidgetPosition, WidgetSize};
 
+#[derive(Clone)]
 pub struct Widget<T> {
     shared_widget: Arc<(Mutex<SharedWidget<T>>, Condvar)>,
 }
@@ -58,15 +59,29 @@ impl<T: 'static + Default + Send> Widget<T> {
         }
         true
     }
+
+    pub fn redraw(&self) {
+        let shared_widget = self.shared_widget.0.lock().unwrap();
+        if shared_widget.event_sender.send(WidgetEvent::Redraw).is_err() {
+            println!("Error: redraw not sent");
+        };
+    }
+
+    pub fn update_app_state(&self, new_state: T) {
+        let mut shared_widget = self.shared_widget.0.lock().unwrap();
+        shared_widget.app_state = new_state;
+    }
 }
 
 struct SharedWidget<T> {
     exit: bool, 
+    app_state: T,
     surfaces: Vec<Surface<T>>,
     //buttons: Vec<Button>, // TODO
     event_sender: Sender<WidgetEvent>,
     frame_asked: bool,
-    wl_surface: Option<wl_surface::WlSurface>
+    wl_surface: Option<wl_surface::WlSurface>,
+    conn: Connection,
 }
 
 impl<T: 'static + Default + Send> SharedWidget<T> {
@@ -75,6 +90,7 @@ impl<T: 'static + Default + Send> SharedWidget<T> {
             if let Some(surface) = self.wl_surface.as_mut() {
                 surface.frame(qh, FrameRequest::Redraw);
                 surface.commit();
+                self.conn.flush().expect("Disconnected from wayland");
                 self.frame_asked = true;
             }
         }
@@ -94,7 +110,6 @@ struct WidgetState<T> {
     compositor: CompositorState,
     layer_shell: LayerShell,
 
-    app_state: T,
     need_redraw: bool,
     pool: Option<SlotPool>,
     width: Option<u32>,
@@ -152,10 +167,12 @@ impl<T: 'static + Default + Send> WidgetState<T> {
         let shared_widget = Arc::new((
             Mutex::new(SharedWidget {
                 exit: false,
+                app_state: T::default(),
                 surfaces: vec![],
                 event_sender: tx,
                 frame_asked: false,
                 wl_surface: None,
+                conn,
             }),
             Condvar::new(),
         ));
@@ -170,7 +187,6 @@ impl<T: 'static + Default + Send> WidgetState<T> {
             compositor: compositor,
             layer_shell: layer_shell,
 
-            app_state: T::default(),
             need_redraw: true,
             pool: None,
             width: None,
@@ -202,7 +218,7 @@ impl<T: 'static + Default + Send> WidgetState<T> {
 
         let shared_widget_clone = Arc::clone(&shared_widget);
         thread::spawn(move || {
-            while let Ok(event) = rx.try_recv() {
+            while let Ok(event) = rx.recv() {
                 match event {
                     WidgetEvent::Exit => return,
                     WidgetEvent::Redraw => {
@@ -237,12 +253,13 @@ impl<T: 'static + Default + Send> WidgetState<T> {
 
             // Render with the user render function
             shared_widget.surfaces.sort_by_key(|s| s.id); // TODO: only call this when to_front_of is call on a Surface ?
-            for surface in &shared_widget.surfaces {
+            let len = shared_widget.surfaces.len();
+            for i in 0..len {
                 // TODO: surfaces without "need_redraw" do not need redraw if they are not above a redrawed surface
-                let (surface_width, surface_height) = surface.size.get_dimension(width, height);
-                (surface.render)(canvas, surface_width.unwrap(), surface_height.unwrap(), &mut self.app_state); // TODO: Use the position and size of the Surface
+                let (surface_width, surface_height) = shared_widget.surfaces[i].size.get_dimension(width, height);
+                (shared_widget.surfaces[i].render)(canvas, surface_width.unwrap(), surface_height.unwrap(), &mut shared_widget.app_state); // TODO: Use the position and size of the Surface
 
-                let (x, y) = surface.position.get_coordinates(width, height, (surface_width.unwrap(), surface_height.unwrap()));
+                let (x, y) = shared_widget.surfaces[i].position.get_coordinates(width, height, (surface_width.unwrap(), surface_height.unwrap()));
                 layer.wl_surface().damage_buffer(x, y, surface_width.unwrap() as i32, surface_height.unwrap() as i32); // TODO: should damage (and redraw) only when something change (and save that we have applied that change into the Surface)
             }
         }
@@ -413,7 +430,7 @@ impl<T: 'static + Default + Send> LayerShellHandler for WidgetState<T> {
     }
 }
 
-impl<T: 'static> SeatHandler for WidgetState<T> {
+impl<T: 'static + Default + Send> SeatHandler for WidgetState<T> {
     fn seat_state(&mut self) -> &mut SeatState {
         &mut self.seat_state
     }
@@ -452,7 +469,7 @@ impl<T: 'static> SeatHandler for WidgetState<T> {
     }
 }
 
-impl<T> PointerHandler for WidgetState<T> {
+impl<T: 'static + Default + Send> PointerHandler for WidgetState<T> {
     fn pointer_frame(
         &mut self,
         _conn: &Connection,
@@ -540,7 +557,7 @@ impl<T: 'static + Default + Send> ProvidesRegistryState for WidgetState<T> {
 delegate_compositor!(@<T: 'static + Default + Send> WidgetState<T>);
 delegate_output!(@<T: 'static + Default + Send> WidgetState<T>);
 delegate_shm!(@<T> WidgetState<T>);
-delegate_seat!(@<T: 'static> WidgetState<T>);
-delegate_pointer!(@<T> WidgetState<T>);
+delegate_seat!(@<T: 'static + Default + Send> WidgetState<T>);
+delegate_pointer!(@<T: 'static + Default + Send> WidgetState<T>);
 delegate_layer!(@<T: 'static + Default + Send> WidgetState<T>);
 delegate_registry!(@<T: 'static + Default + Send> WidgetState<T>);
