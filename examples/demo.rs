@@ -1,6 +1,11 @@
 use wlr_lite_widget::{SizeUnit, Surface, Widget, WidgetPosition, WidgetSize};
 use tiny_skia::{PixmapMut, Color, Paint, Rect, Transform};
 
+#[derive(Default)]
+pub struct MyStruct {
+    clicked: bool,
+}
+
 fn main() {
     println!("--- Début de l'exemple ---");
 
@@ -43,7 +48,7 @@ fn main() {
     println!("--- Fin de l'exemple ---");
 }
 
-fn render(canvas: &mut [u8], width: u32, height: u32, clicked: bool) { // TODO: Need a custom state to replace "clicked"
+fn render(canvas: &mut [u8], width: u32, height: u32, app_state: &mut MyStruct) {
     let ptr = canvas.as_mut_ptr();
     let len = canvas.len();
     let fake_canvas = unsafe { std::slice::from_raw_parts_mut(ptr, len) };
@@ -56,7 +61,7 @@ fn render(canvas: &mut [u8], width: u32, height: u32, clicked: bool) { // TODO: 
     ).expect("Erreur taille buffer / stride");
 
     // Choix de la couleur
-    let color = if clicked {
+    let color = if app_state.clicked {
         Color::from_rgba8(255, 0, 0, 255)
     } else {
         Color::from_rgba8(0, 255, 0, 255)
@@ -76,7 +81,7 @@ fn render(canvas: &mut [u8], width: u32, height: u32, clicked: bool) { // TODO: 
     }
 }
 
-fn render2(canvas: &mut [u8], width: u32, height: u32, clicked: bool) { // TODO: Need a custom state to replace "clicked"
+fn render2(canvas: &mut [u8], width: u32, height: u32, app_state: &mut MyStruct) {
     let ptr = canvas.as_mut_ptr();
     let len = canvas.len();
     let fake_canvas = unsafe { std::slice::from_raw_parts_mut(ptr, len) };
@@ -89,7 +94,7 @@ fn render2(canvas: &mut [u8], width: u32, height: u32, clicked: bool) { // TODO:
     ).expect("Erreur taille buffer / stride");
 
     // Choix de la couleur
-    let color = if !clicked {
+    let color = if !app_state.clicked {
         Color::from_rgba8(255, 0, 0, 255)
     } else {
         Color::from_rgba8(0, 255, 0, 255)

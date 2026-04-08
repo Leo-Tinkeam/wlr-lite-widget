@@ -25,16 +25,16 @@ use wayland_client::{
 };
 use crate::{SizeUnit, Surface, WidgetAnchor, Margin, WidgetPosition, WidgetSize};
 
-pub struct Widget {
-    shared_widget: Arc<(Mutex<SharedWidget>, Condvar)>,
+pub struct Widget<T> {
+    shared_widget: Arc<(Mutex<SharedWidget<T>>, Condvar)>,
 }
 
-impl Widget {
+impl<T: 'static + Default + Send> Widget<T> {
     pub fn new(size: WidgetSize, position: WidgetPosition, name: String, layer: Option<Layer>) -> Self {
         WidgetState::create(size, position, name, layer)
     }
 
-    pub fn add_surface(&mut self, mut surface: Surface) {
+    pub fn add_surface(&mut self, mut surface: Surface<T>) {
         let mut shared_widget = self.shared_widget.0.lock().unwrap();
         surface.event_sender = Some(shared_widget.event_sender.clone());
         shared_widget.surfaces.push(surface);
@@ -60,17 +60,17 @@ impl Widget {
     }
 }
 
-struct SharedWidget {
+struct SharedWidget<T> {
     exit: bool, 
-    surfaces: Vec<Surface>,
+    surfaces: Vec<Surface<T>>,
     //buttons: Vec<Button>, // TODO
     event_sender: Sender<WidgetEvent>,
     frame_asked: bool,
     wl_surface: Option<wl_surface::WlSurface>
 }
 
-impl SharedWidget {
-    fn ask_redraw(&mut self, qh: &QueueHandle<WidgetState>) {
+impl<T: 'static + Default + Send> SharedWidget<T> {
+    fn ask_redraw(&mut self, qh: &QueueHandle<WidgetState<T>>) {
         if !self.frame_asked {
             if let Some(surface) = self.wl_surface.as_mut() {
                 surface.frame(qh, FrameRequest::Redraw);
@@ -86,7 +86,7 @@ pub(crate) enum WidgetEvent {
     Exit,
 }
 
-struct WidgetState {
+struct WidgetState<T> {
     registry_state: RegistryState,
     seat_state: SeatState,
     output_state: OutputState,
@@ -94,11 +94,11 @@ struct WidgetState {
     compositor: CompositorState,
     layer_shell: LayerShell,
 
+    app_state: T,
     need_redraw: bool,
     pool: Option<SlotPool>,
     width: Option<u32>,
     height: Option<u32>,
-    clicked: bool,
     layer: Option<LayerSurface>,
     pointer: Option<wl_pointer::WlPointer>,
 
@@ -108,17 +108,17 @@ struct WidgetState {
     widget_anchor: Option<Anchor>,
     margin: Margin,
 
-    shared_widget: Arc<(Mutex<SharedWidget>, Condvar)>,
+    shared_widget: Arc<(Mutex<SharedWidget<T>>, Condvar)>,
 }
 
-impl WidgetState {
-    fn create(size: WidgetSize, position: WidgetPosition, name: String, layer: Option<Layer>) -> Widget {
+impl<T: 'static + Default + Send> WidgetState<T> {
+    fn create(size: WidgetSize, position: WidgetPosition, name: String, layer: Option<Layer>) -> Widget<T> {
         // Connecting to the compositor (server)
         let conn = Connection::connect_to_env().unwrap();
 
         // Enumerate the list of globals to get the protocols the server implements.
         let (globals, mut event_queue) = registry_queue_init(&conn).unwrap();
-        let qh: QueueHandle<WidgetState> = event_queue.handle();
+        let qh: QueueHandle<WidgetState<T>> = event_queue.handle();
 
         // The compositor (not to be confused with the server which is commonly called the compositor) allows
         // configuring surfaces to be presented.
@@ -170,11 +170,11 @@ impl WidgetState {
             compositor: compositor,
             layer_shell: layer_shell,
 
+            app_state: T::default(),
             need_redraw: true,
             pool: None,
             width: None,
             height: None,
-            clicked: false,
             
             layer: None,
             pointer: None,
@@ -240,7 +240,7 @@ impl WidgetState {
             for surface in &shared_widget.surfaces {
                 // TODO: surfaces without "need_redraw" do not need redraw if they are not above a redrawed surface
                 let (surface_width, surface_height) = surface.size.get_dimension(width, height);
-                (surface.render)(canvas, surface_width.unwrap(), surface_height.unwrap(), self.clicked); // TODO: Use the position and size of the Surface
+                (surface.render)(canvas, surface_width.unwrap(), surface_height.unwrap(), &mut self.app_state); // TODO: Use the position and size of the Surface
 
                 let (x, y) = surface.position.get_coordinates(width, height, (surface_width.unwrap(), surface_height.unwrap()));
                 layer.wl_surface().damage_buffer(x, y, surface_width.unwrap() as i32, surface_height.unwrap() as i32); // TODO: should damage (and redraw) only when something change (and save that we have applied that change into the Surface)
@@ -253,7 +253,7 @@ impl WidgetState {
     }
 }
 
-impl CompositorHandler for WidgetState {
+impl<T: 'static + Default + Send> CompositorHandler for WidgetState<T> {
     fn scale_factor_changed(
         &mut self,
         _conn: &Connection,
@@ -305,7 +305,7 @@ impl CompositorHandler for WidgetState {
     }
 }
 
-impl OutputHandler for WidgetState {
+impl<T: 'static + Default + Send> OutputHandler for WidgetState<T> {
     fn output_state(&mut self) -> &mut OutputState {
         &mut self.output_state
     }
@@ -389,7 +389,7 @@ impl OutputHandler for WidgetState {
     }
 }
 
-impl LayerShellHandler for WidgetState {
+impl<T: 'static + Default + Send> LayerShellHandler for WidgetState<T> {
     fn closed(&mut self, _conn: &Connection, _qh: &QueueHandle<Self>, _layer: &LayerSurface) {
         let mut shared_widget = self.shared_widget.0.lock().unwrap();
         if shared_widget.event_sender.send(WidgetEvent::Exit).is_err() {
@@ -413,7 +413,7 @@ impl LayerShellHandler for WidgetState {
     }
 }
 
-impl SeatHandler for WidgetState {
+impl<T: 'static> SeatHandler for WidgetState<T> {
     fn seat_state(&mut self) -> &mut SeatState {
         &mut self.seat_state
     }
@@ -452,7 +452,7 @@ impl SeatHandler for WidgetState {
     }
 }
 
-impl PointerHandler for WidgetState {
+impl<T> PointerHandler for WidgetState<T> {
     fn pointer_frame(
         &mut self,
         _conn: &Connection,
@@ -476,13 +476,14 @@ impl PointerHandler for WidgetState {
                 }
                 Motion { .. } => {}
                 Press { button, .. } => {
-                    println!("Press {:x} @ {:?}", button, event.position);
+                    /* println!("Press {:x} @ {:?}", button, event.position);
                     self.clicked = !self.clicked;
                     {
                         let (lock, _) = self.shared_widget.as_ref();
                         let mut shared_widget = lock.lock().unwrap();
                         shared_widget.ask_redraw(qh);
-                    }
+                    } */
+                   // TODO: Appeler un onClic
                 }
                 Release { button, .. } => {
                     println!("Release {:x} @ {:?}", button, event.position);
@@ -499,7 +500,7 @@ enum FrameRequest {
     Redraw,
 }
 
-impl Dispatch<wl_callback::WlCallback, FrameRequest> for WidgetState {
+impl<T: 'static + Default + Send> Dispatch<wl_callback::WlCallback, FrameRequest> for WidgetState<T> {
     fn event(
         widget_state: &mut Self,
         _cb: &wl_callback::WlCallback,
@@ -523,23 +524,23 @@ impl Dispatch<wl_callback::WlCallback, FrameRequest> for WidgetState {
     }
 }
 
-impl ShmHandler for WidgetState {
+impl<T> ShmHandler for WidgetState<T> {
     fn shm_state(&mut self) -> &mut Shm {
         &mut self.shm
     }
 }
 
-impl ProvidesRegistryState for WidgetState {
+impl<T: 'static + Default + Send> ProvidesRegistryState for WidgetState<T> {
     fn registry(&mut self) -> &mut RegistryState {
         &mut self.registry_state
     }
     registry_handlers![OutputState, SeatState];
 }
 
-delegate_compositor!(WidgetState);
-delegate_output!(WidgetState);
-delegate_shm!(WidgetState);
-delegate_seat!(WidgetState);
-delegate_pointer!(WidgetState);
-delegate_layer!(WidgetState);
-delegate_registry!(WidgetState);
+delegate_compositor!(@<T: 'static + Default + Send> WidgetState<T>);
+delegate_output!(@<T: 'static + Default + Send> WidgetState<T>);
+delegate_shm!(@<T> WidgetState<T>);
+delegate_seat!(@<T: 'static> WidgetState<T>);
+delegate_pointer!(@<T> WidgetState<T>);
+delegate_layer!(@<T: 'static + Default + Send> WidgetState<T>);
+delegate_registry!(@<T: 'static + Default + Send> WidgetState<T>);

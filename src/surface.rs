@@ -3,17 +3,17 @@ use crate::{WidgetPosition, WidgetSize, widget::WidgetEvent};
 
 static NEXT_SURFACE_ID: AtomicI32 = AtomicI32::new(1);
 
-pub struct Surface {
+pub struct Surface<T> {
     pub(crate) id: i32,
     pub(crate) size: WidgetSize,
     pub(crate) position: WidgetPosition,
-    pub(crate) render: fn(&mut [u8], u32, u32, bool), // TODO: Help user to create these for exemple fill_color() and a custom type for advanced shapes
+    pub(crate) render: fn(&mut [u8], u32, u32, &mut T), // TODO: Help user to create these for exemple fill_color() and a custom type for advanced shapes
     pub(crate) need_redraw: bool,
     pub(crate) event_sender: Option<Sender<WidgetEvent>>
 }
 
-impl Surface {
-    pub fn new(size: WidgetSize, position: WidgetPosition, render: fn(&mut [u8], u32, u32, bool)) -> Self {
+impl<T> Surface<T> {
+    pub fn new(size: WidgetSize, position: WidgetPosition, render: fn(&mut [u8], u32, u32, &mut T)) -> Self {
         let id = NEXT_SURFACE_ID.fetch_add(1, Ordering::Relaxed);
 
         Surface {
@@ -38,13 +38,13 @@ impl Surface {
         self.draw();
     }
 
-    pub fn edit_render(&mut self, new_render: fn(&mut [u8], u32, u32, bool)) {
+    pub fn edit_render(&mut self, new_render: fn(&mut [u8], u32, u32, &mut T)) {
         self.render = new_render;
 
         self.draw();
     }
 
-    pub fn to_front_of(&mut self, other_surface: &mut Surface) {
+    pub fn to_front_of(&mut self, other_surface: &mut Surface<T>) {
         if self.id < other_surface.id {
             let temp_id = self.id;
             self.id = other_surface.id;
