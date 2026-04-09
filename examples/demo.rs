@@ -1,4 +1,4 @@
-use wlr_lite_widget::{SizeUnit, Surface, Widget, WidgetPosition, WidgetSize};
+use wlr_lite_widget::{MouseButton, MouseResponse, SizeUnit, Surface, Widget, WidgetPosition, WidgetSize};
 use tiny_skia::{PixmapMut, Color, Paint, Rect, Transform};
 use std::thread;
 use std::time::Duration;
@@ -40,7 +40,14 @@ fn main() {
 
     let widget_position = WidgetPosition::Coordinates(SizeUnit::Percent(10f32), SizeUnit::Percent(10f32));
 
-    let mut widget = Widget::new(widget_size, widget_position, "MyWidget".to_string(), None);
+    let mut widget = Widget::new(widget_size, widget_position, "MyWidget".to_string(), None)
+        .on_press(|my_struct: &mut MyStruct, button| {
+            if button == &MouseButton::LEFT {
+                my_struct.clicked = !my_struct.clicked;
+                return MouseResponse { do_default: false, need_redraw: true };
+            }
+            return MouseResponse { do_default: false, need_redraw: false };
+        });
 
     widget.add_surface(surface);
     widget.add_surface(surface2);

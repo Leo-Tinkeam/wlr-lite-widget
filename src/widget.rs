@@ -25,6 +25,52 @@ use wayland_client::{
 };
 use crate::{SizeUnit, Surface, WidgetAnchor, Margin, WidgetPosition, WidgetSize};
 
+#[derive(PartialEq)]
+pub enum MouseButton {
+    LEFT,
+    RIGHT,
+    MIDDLE,
+    SIDE, // This is the "next" button
+    EXTRA, // This is the "previous" button
+}
+
+#[derive(Default)]
+pub struct MouseHandler<T> { // TODO: should create a dedicated file for everything that concern mouse
+    on_press: Option<fn(&mut T, button: &MouseButton) -> MouseResponse>,
+    on_release: Option<fn(&mut T, button: &MouseButton) -> MouseResponse>,
+}
+
+pub struct MouseResponse {
+    pub do_default: bool, // TODO: Allow to do_default only on some MouseButton
+    pub need_redraw: bool,
+}
+
+pub fn default_on_press(button: MouseButton) {
+    // TODO: this may be useless but it's here, easy to be deleted, just in case
+}
+
+pub fn default_on_release(button: MouseButton) {
+    // TODO: this may be useless but it's here, easy to be deleted, just in case
+}
+
+impl<T> Widget<T> {
+    pub fn on_press(self, func: fn(&mut T, button: &MouseButton) -> MouseResponse) -> Self {
+        {
+            let mut shared_widget = self.shared_widget.0.lock().unwrap();
+            shared_widget.mouse_handler.on_press = Some(func);
+        }
+        self
+    }
+
+    pub fn on_release(self, func: fn(&mut T, button: &MouseButton) -> MouseResponse) -> Self {
+        {
+            let mut shared_widget = self.shared_widget.0.lock().unwrap();
+            shared_widget.mouse_handler.on_release = Some(func);
+        }
+        self
+    }
+}
+
 #[derive(Clone)]
 pub struct Widget<T> {
     shared_widget: Arc<(Mutex<SharedWidget<T>>, Condvar)>,
@@ -82,6 +128,8 @@ struct SharedWidget<T> {
     frame_asked: bool,
     wl_surface: Option<wl_surface::WlSurface>,
     conn: Connection,
+
+    mouse_handler: MouseHandler<T>,
 }
 
 impl<T: 'static + Default + Send> SharedWidget<T> {
@@ -173,6 +221,8 @@ impl<T: 'static + Default + Send> WidgetState<T> {
                 frame_asked: false,
                 wl_surface: None,
                 conn,
+
+                mouse_handler: MouseHandler::default(),
             }),
             Condvar::new(),
         ));
@@ -486,27 +536,58 @@ impl<T: 'static + Default + Send> PointerHandler for WidgetState<T> {
             }
             match event.kind {
                 Enter { .. } => {
-                    println!("Pointer entered @{:?}", event.position);
+                    // TODO: use this for hover animation
+                    // TODO: Appeler un onEnter
                 }
                 Leave { .. } => {
-                    println!("Pointer left");
+                    // TODO: use this for hover animation
+                    // TODO: Appeler un onLeave
                 }
-                Motion { .. } => {}
+                Motion { .. } => {
+                    // TODO: appeler un onMotion
+                }
                 Press { button, .. } => {
-                    /* println!("Press {:x} @ {:?}", button, event.position);
-                    self.clicked = !self.clicked;
-                    {
-                        let (lock, _) = self.shared_widget.as_ref();
-                        let mut shared_widget = lock.lock().unwrap();
-                        shared_widget.ask_redraw(qh);
-                    } */
-                   // TODO: Appeler un onClic
+                    let mouse_button = match button { // This come from linux kernel : input-event-code.h // TODO: This is written twice, use a function (maybe From u32 for Option<MouseButton>)
+                        0x110 => MouseButton::LEFT,
+                        0x111 => MouseButton::RIGHT,
+                        0x112 => MouseButton::MIDDLE,
+                        0x113 => MouseButton::SIDE,
+                        0x114 => MouseButton::EXTRA,
+                        _ => return,
+                    };
+                    let (lock, _) = self.shared_widget.as_ref();
+                    let mut shared_widget = lock.lock().unwrap();
+                    let mut do_default = true;
+                    if let Some(on_press) = shared_widget.mouse_handler.on_press {
+                        let mouse_response = on_press(&mut shared_widget.app_state, &mouse_button);
+                        do_default = mouse_response.do_default;
+                        if mouse_response.need_redraw {
+                            shared_widget.ask_redraw(qh);
+                        }
+                    }
+                    if do_default {
+                        default_on_press(mouse_button);
+                    }
                 }
                 Release { button, .. } => {
-                    println!("Release {:x} @ {:?}", button, event.position);
+                    let mouse_button = match button { // This come from linux kernel : input-event-code.h
+                        0x110 => MouseButton::LEFT,
+                        0x111 => MouseButton::RIGHT,
+                        0x112 => MouseButton::MIDDLE,
+                        0x113 => MouseButton::SIDE,
+                        0x114 => MouseButton::EXTRA,
+                        _ => return,
+                    };
+                    let (lock, _) = self.shared_widget.as_ref();
+                    let mut shared_widget = lock.lock().unwrap();
+                    if let Some(on_release) = shared_widget.mouse_handler.on_release {
+                        on_release(&mut shared_widget.app_state, &mouse_button);
+                    } else {
+                        default_on_release(mouse_button);
+                    }
                 }
                 Axis { horizontal, vertical, .. } => {
-                    println!("Scroll H:{horizontal:?}, V:{vertical:?}");
+                    // TODO: Appeler un onScroll
                 }
             }
         }
