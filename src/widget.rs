@@ -6,10 +6,7 @@ use smithay_client_toolkit::{
     output::{OutputHandler, OutputState},
     registry::{ProvidesRegistryState, RegistryState},
     registry_handlers,
-    seat::{
-        Capability, SeatHandler, SeatState,
-        pointer::{PointerEvent, PointerEventKind, PointerHandler}
-    },
+    seat::{Capability, SeatHandler, SeatState,},
     shell::{
         WaylandSurface,
         wlr_layer::{
@@ -23,57 +20,11 @@ use std::{sync::{Arc, Condvar, Mutex, mpsc::{Receiver, Sender, channel}}, thread
 use wayland_client::{
     Connection, Dispatch, QueueHandle, globals::registry_queue_init, protocol::{wl_callback, wl_output, wl_pointer, wl_seat, wl_shm, wl_surface}
 };
-use crate::{SizeUnit, Surface, WidgetAnchor, Margin, WidgetPosition, WidgetSize};
-
-#[derive(PartialEq)]
-pub enum MouseButton {
-    LEFT,
-    RIGHT,
-    MIDDLE,
-    SIDE, // This is the "next" button
-    EXTRA, // This is the "previous" button
-}
-
-#[derive(Default)]
-pub struct MouseHandler<T> { // TODO: should create a dedicated file for everything that concern mouse
-    on_press: Option<fn(&mut T, button: &MouseButton) -> MouseResponse>,
-    on_release: Option<fn(&mut T, button: &MouseButton) -> MouseResponse>,
-}
-
-pub struct MouseResponse {
-    pub do_default: bool, // TODO: Allow to do_default only on some MouseButton
-    pub need_redraw: bool,
-}
-
-pub fn default_on_press(button: MouseButton) {
-    // TODO: this may be useless but it's here, easy to be deleted, just in case
-}
-
-pub fn default_on_release(button: MouseButton) {
-    // TODO: this may be useless but it's here, easy to be deleted, just in case
-}
-
-impl<T> Widget<T> {
-    pub fn on_press(self, func: fn(&mut T, button: &MouseButton) -> MouseResponse) -> Self {
-        {
-            let mut shared_widget = self.shared_widget.0.lock().unwrap();
-            shared_widget.mouse_handler.on_press = Some(func);
-        }
-        self
-    }
-
-    pub fn on_release(self, func: fn(&mut T, button: &MouseButton) -> MouseResponse) -> Self {
-        {
-            let mut shared_widget = self.shared_widget.0.lock().unwrap();
-            shared_widget.mouse_handler.on_release = Some(func);
-        }
-        self
-    }
-}
+use crate::{SizeUnit, Surface, WidgetAnchor, Margin, WidgetPosition, WidgetSize, MouseHandler};
 
 #[derive(Clone)]
 pub struct Widget<T> {
-    shared_widget: Arc<(Mutex<SharedWidget<T>>, Condvar)>,
+    pub(crate) shared_widget: Arc<(Mutex<SharedWidget<T>>, Condvar)>,
 }
 
 impl<T: 'static + Default + Send> Widget<T> {
@@ -119,9 +70,9 @@ impl<T: 'static + Default + Send> Widget<T> {
     }
 }
 
-struct SharedWidget<T> {
+pub(crate) struct SharedWidget<T> {
     exit: bool, 
-    app_state: T,
+    pub(crate) app_state: T,
     surfaces: Vec<Surface<T>>,
     //buttons: Vec<Button>, // TODO
     event_sender: Sender<WidgetEvent>,
@@ -129,11 +80,11 @@ struct SharedWidget<T> {
     wl_surface: Option<wl_surface::WlSurface>,
     conn: Connection,
 
-    mouse_handler: MouseHandler<T>,
+    pub(crate) mouse_handler: MouseHandler<T>,
 }
 
 impl<T: 'static + Default + Send> SharedWidget<T> {
-    fn ask_redraw(&mut self, qh: &QueueHandle<WidgetState<T>>) {
+    pub(crate) fn ask_redraw(&mut self, qh: &QueueHandle<WidgetState<T>>) {
         if !self.frame_asked {
             if let Some(surface) = self.wl_surface.as_mut() {
                 surface.frame(qh, FrameRequest::Redraw);
@@ -150,7 +101,7 @@ pub(crate) enum WidgetEvent {
     Exit,
 }
 
-struct WidgetState<T> {
+pub(crate) struct WidgetState<T> {
     registry_state: RegistryState,
     seat_state: SeatState,
     output_state: OutputState,
@@ -162,7 +113,7 @@ struct WidgetState<T> {
     pool: Option<SlotPool>,
     width: Option<u32>,
     height: Option<u32>,
-    layer: Option<LayerSurface>,
+    pub(crate) layer: Option<LayerSurface>,
     pointer: Option<wl_pointer::WlPointer>,
 
     widget_size: WidgetSize,
@@ -171,7 +122,7 @@ struct WidgetState<T> {
     widget_anchor: Option<Anchor>,
     margin: Margin,
 
-    shared_widget: Arc<(Mutex<SharedWidget<T>>, Condvar)>,
+    pub(crate) shared_widget: Arc<(Mutex<SharedWidget<T>>, Condvar)>,
 }
 
 impl<T: 'static + Default + Send> WidgetState<T> {
@@ -516,81 +467,6 @@ impl<T: 'static + Default + Send> SeatHandler for WidgetState<T> {
 
     fn remove_seat(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_seat::WlSeat) {
         // Not needed for our widget
-    }
-}
-
-impl<T: 'static + Default + Send> PointerHandler for WidgetState<T> {
-    fn pointer_frame(
-        &mut self,
-        _conn: &Connection,
-        qh: &QueueHandle<Self>,
-        _pointer: &wl_pointer::WlPointer,
-        events: &[PointerEvent],
-    ) {
-        use PointerEventKind::*;
-        for event in events {
-            // Ignore events for other surfaces
-            match self.layer.clone() {
-                None => continue,
-                Some(layer) => if &event.surface != layer.wl_surface() {continue},
-            }
-            match event.kind {
-                Enter { .. } => {
-                    // TODO: use this for hover animation
-                    // TODO: Appeler un onEnter
-                }
-                Leave { .. } => {
-                    // TODO: use this for hover animation
-                    // TODO: Appeler un onLeave
-                }
-                Motion { .. } => {
-                    // TODO: appeler un onMotion
-                }
-                Press { button, .. } => {
-                    let mouse_button = match button { // This come from linux kernel : input-event-code.h // TODO: This is written twice, use a function (maybe From u32 for Option<MouseButton>)
-                        0x110 => MouseButton::LEFT,
-                        0x111 => MouseButton::RIGHT,
-                        0x112 => MouseButton::MIDDLE,
-                        0x113 => MouseButton::SIDE,
-                        0x114 => MouseButton::EXTRA,
-                        _ => return,
-                    };
-                    let (lock, _) = self.shared_widget.as_ref();
-                    let mut shared_widget = lock.lock().unwrap();
-                    let mut do_default = true;
-                    if let Some(on_press) = shared_widget.mouse_handler.on_press {
-                        let mouse_response = on_press(&mut shared_widget.app_state, &mouse_button);
-                        do_default = mouse_response.do_default;
-                        if mouse_response.need_redraw {
-                            shared_widget.ask_redraw(qh);
-                        }
-                    }
-                    if do_default {
-                        default_on_press(mouse_button);
-                    }
-                }
-                Release { button, .. } => {
-                    let mouse_button = match button { // This come from linux kernel : input-event-code.h
-                        0x110 => MouseButton::LEFT,
-                        0x111 => MouseButton::RIGHT,
-                        0x112 => MouseButton::MIDDLE,
-                        0x113 => MouseButton::SIDE,
-                        0x114 => MouseButton::EXTRA,
-                        _ => return,
-                    };
-                    let (lock, _) = self.shared_widget.as_ref();
-                    let mut shared_widget = lock.lock().unwrap();
-                    if let Some(on_release) = shared_widget.mouse_handler.on_release {
-                        on_release(&mut shared_widget.app_state, &mouse_button);
-                    } else {
-                        default_on_release(mouse_button);
-                    }
-                }
-                Axis { horizontal, vertical, .. } => {
-                    // TODO: Appeler un onScroll
-                }
-            }
-        }
     }
 }
 
