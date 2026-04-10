@@ -6,7 +6,7 @@ use smithay_client_toolkit::{
     output::{OutputHandler, OutputState},
     registry::{ProvidesRegistryState, RegistryState},
     registry_handlers,
-    seat::{Capability, SeatHandler, SeatState,},
+    seat::{Capability, SeatHandler, SeatState, pointer::cursor_shape::CursorShapeManager,},
     shell::{
         WaylandSurface,
         wlr_layer::{
@@ -114,6 +114,7 @@ pub(crate) struct WidgetState<T> {
     width: Option<u32>,
     height: Option<u32>,
     pub(crate) layer: Option<LayerSurface>,
+    pub(crate) cursor_shape_manager: CursorShapeManager,
     pointer: Option<wl_pointer::WlPointer>,
 
     widget_size: WidgetSize,
@@ -140,6 +141,7 @@ impl<T: 'static + Default + Send> WidgetState<T> {
 
         // This app uses the wlr layer shell, which may not be available with every compositor.
         let layer_shell = LayerShell::bind(&globals, &qh).expect("layer shell is not available");
+        let cursor_shape_manager = CursorShapeManager::bind(&globals, &qh).expect("cursor manager is not available");
 
         // We use wl_shm to allow software rendering to a buffer we share with the compositor process.
         let shm = Shm::bind(&globals, &qh).expect("wl_shm is not available");
@@ -194,6 +196,7 @@ impl<T: 'static + Default + Send> WidgetState<T> {
             height: None,
             
             layer: None,
+            cursor_shape_manager,
             pointer: None,
 
             widget_size: size,
@@ -308,9 +311,7 @@ impl<T: 'static + Default + Send> CompositorHandler for WidgetState<T> {
         _qh: &QueueHandle<Self>,
         _surface: &wl_surface::WlSurface,
         _output: &wl_output::WlOutput,
-    ) {
-        // TODO: Will be used for "hover" animations
-    }
+    ) {}
 
     fn surface_leave(
         &mut self,
@@ -318,9 +319,7 @@ impl<T: 'static + Default + Send> CompositorHandler for WidgetState<T> {
         _qh: &QueueHandle<Self>,
         _surface: &wl_surface::WlSurface,
         _output: &wl_output::WlOutput,
-    ) {
-        // TODO: Will be used for "hover" animations
-    }
+    ) {}
 }
 
 impl<T: 'static + Default + Send> OutputHandler for WidgetState<T> {

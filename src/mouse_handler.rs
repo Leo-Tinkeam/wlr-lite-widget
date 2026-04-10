@@ -1,6 +1,5 @@
 use smithay_client_toolkit::{
-    seat::pointer::{PointerEvent, PointerEventKind, PointerHandler},
-    shell::WaylandSurface,
+    reexports::protocols::wp::cursor_shape::v1::client::wp_cursor_shape_device_v1::Shape, seat::pointer::{PointerEvent, PointerEventKind, PointerHandler}, shell::WaylandSurface
 };
 use wayland_client::{Connection, QueueHandle, protocol::wl_pointer};
 use crate::{Widget, WidgetState};
@@ -67,7 +66,7 @@ impl<T: 'static + Default + Send> PointerHandler for WidgetState<T> {
         &mut self,
         _conn: &Connection,
         qh: &QueueHandle<Self>,
-        _pointer: &wl_pointer::WlPointer,
+        pointer: &wl_pointer::WlPointer,
         events: &[PointerEvent],
     ) {
         use PointerEventKind::*;
@@ -78,7 +77,10 @@ impl<T: 'static + Default + Send> PointerHandler for WidgetState<T> {
                 Some(layer) => if &event.surface != layer.wl_surface() {continue},
             }
             match event.kind {
-                Enter { .. } => {
+                Enter { serial } => {
+                    let device = self.cursor_shape_manager.get_shape_device(pointer, qh);
+                    device.set_shape(serial, Shape::Default);
+                    device.destroy();
                     // TODO: use this for hover animation
                     // TODO: Appeler un onEnter
                 }
