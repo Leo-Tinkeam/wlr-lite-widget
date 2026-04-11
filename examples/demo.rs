@@ -26,7 +26,13 @@ fn main() {
         full_size,
         position_0.clone(),
         render
-    );
+    ).on_press(|my_struct: &mut MyStruct, button| {
+        if button == &MouseButton::LEFT {
+            my_struct.clicked = true;
+            return MouseResponse { do_default: false, need_redraw: true };
+        }
+        return MouseResponse { do_default: false, need_redraw: false };
+    });
 
     let half_size = WidgetSize {
         width: SizeUnit::Percent(50f32),
@@ -36,17 +42,23 @@ fn main() {
         half_size,
         position_0,
         render2
-    );
+    ).on_press(|my_struct: &mut MyStruct, button| {
+        if button == &MouseButton::LEFT {
+            my_struct.clicked = false;
+            return MouseResponse { do_default: true, need_redraw: true };
+        }
+        return MouseResponse { do_default: false, need_redraw: false };
+    });
 
     let widget_position = WidgetPosition::Coordinates(SizeUnit::Percent(10f32), SizeUnit::Percent(10f32));
 
     let mut widget = Widget::new(widget_size, widget_position, "MyWidget".to_string(), None)
         .on_press(|my_struct: &mut MyStruct, button| {
             if button == &MouseButton::LEFT {
-                my_struct.clicked = !my_struct.clicked;
-                return MouseResponse { do_default: false, need_redraw: true };
+                //my_struct.clicked = !my_struct.clicked;
+                return MouseResponse { do_default: true, need_redraw: true };
             }
-            return MouseResponse { do_default: false, need_redraw: false };
+            return MouseResponse { do_default: true, need_redraw: false };
         });
 
     widget.add_surface(surface);

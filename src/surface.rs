@@ -1,5 +1,5 @@
 use std::sync::{atomic::{AtomicI32, Ordering}, mpsc::Sender};
-use crate::{WidgetPosition, WidgetSize, widget::WidgetEvent};
+use crate::{MouseButton, MouseHandler, MouseResponse, WidgetPosition, WidgetSize, widget::WidgetEvent};
 
 static NEXT_SURFACE_ID: AtomicI32 = AtomicI32::new(1);
 
@@ -9,10 +9,19 @@ pub struct Surface<T> {
     pub(crate) position: WidgetPosition,
     pub(crate) render: fn(&mut [u8], u32, u32, &mut T), // TODO: Help user to create these for exemple fill_color() and a custom type for advanced shapes
     pub(crate) need_redraw: bool,
-    pub(crate) event_sender: Option<Sender<WidgetEvent>>
+    pub(crate) event_sender: Option<Sender<WidgetEvent>>,
+    pub(crate) mouse_handler: MouseHandler<T>,
+    pub(crate) real_size: Option<SurfaceBox>,
 }
 
-impl<T> Surface<T> {
+pub(crate) struct SurfaceBox {
+    pub(crate) min_x: u32,
+    pub(crate) max_x: u32,
+    pub(crate) min_y: u32,
+    pub(crate) max_y: u32,
+}
+
+impl<T: Default> Surface<T> {
     pub fn new(size: WidgetSize, position: WidgetPosition, render: fn(&mut [u8], u32, u32, &mut T)) -> Self {
         let id = NEXT_SURFACE_ID.fetch_add(1, Ordering::Relaxed);
 
@@ -23,7 +32,19 @@ impl<T> Surface<T> {
             render,
             need_redraw: true,
             event_sender: None,
+            mouse_handler: MouseHandler::default(),
+            real_size: None,
         }
+    }
+
+    pub fn on_press(mut self, func: fn(&mut T, button: &MouseButton) -> MouseResponse) -> Self {
+        self.mouse_handler.on_press = Some(func);
+        self
+    }
+
+    pub fn on_release(mut self, func: fn(&mut T, button: &MouseButton) -> MouseResponse) -> Self {
+        self.mouse_handler.on_release = Some(func);
+        self
     }
 
     pub fn edit_size(&mut self, new_size: WidgetSize) {
@@ -62,6 +83,20 @@ impl<T> Surface<T> {
                 println!("Error: redraw not sent");
             }
         }
+    }
+
+    pub(crate) fn update_size(&mut self, parent_width: u32, parent_height: u32) {
+        let (size_x, size_y) = self.size.get_dimension(parent_width, parent_height);
+        let (min_x, min_y) = self.position.get_coordinates(parent_width, parent_height, (size_x, size_y));
+        let (min_x, min_y) = (min_x as u32, min_y as u32);
+        self.real_size = Some(SurfaceBox {
+            min_x,
+            max_x: min_x+size_x,
+            min_y,
+            max_y: min_y+size_y,
+        });
+        // TODO: ask for redraw ? (or maybe not here)
+        // TODO: update size of eventual childs
     }
 
     // We should be able to animate this on "hover" (maybe render with a 0-1 float)

@@ -20,7 +20,7 @@ use std::{sync::{Arc, Condvar, Mutex, mpsc::{Receiver, Sender, channel}}, thread
 use wayland_client::{
     Connection, Dispatch, QueueHandle, globals::registry_queue_init, protocol::{wl_callback, wl_output, wl_pointer, wl_seat, wl_shm, wl_surface}
 };
-use crate::{SizeUnit, Surface, WidgetAnchor, Margin, WidgetPosition, WidgetSize, MouseHandler};
+use crate::{Margin, MouseHandler, SizeUnit, Surface, WidgetAnchor, WidgetPosition, WidgetSize};
 
 #[derive(Clone)]
 pub struct Widget<T> {
@@ -34,6 +34,9 @@ impl<T: 'static + Default + Send> Widget<T> {
 
     pub fn add_surface(&mut self, mut surface: Surface<T>) {
         let mut shared_widget = self.shared_widget.0.lock().unwrap();
+        if let (Some(width), Some(height)) = (shared_widget.width, shared_widget.height) {
+            surface.update_size(width, height);
+        }
         surface.event_sender = Some(shared_widget.event_sender.clone());
         shared_widget.surfaces.push(surface);
     }
@@ -73,14 +76,15 @@ impl<T: 'static + Default + Send> Widget<T> {
 pub(crate) struct SharedWidget<T> {
     exit: bool, 
     pub(crate) app_state: T,
-    surfaces: Vec<Surface<T>>,
-    //buttons: Vec<Button>, // TODO
+    pub(crate) surfaces: Vec<Surface<T>>,
     event_sender: Sender<WidgetEvent>,
     frame_asked: bool,
     wl_surface: Option<wl_surface::WlSurface>,
     conn: Connection,
 
     pub(crate) mouse_handler: MouseHandler<T>,
+    width: Option<u32>,
+    height: Option<u32>,
 }
 
 impl<T: 'static + Default + Send> SharedWidget<T> {
@@ -111,8 +115,6 @@ pub(crate) struct WidgetState<T> {
 
     need_redraw: bool,
     pool: Option<SlotPool>,
-    width: Option<u32>,
-    height: Option<u32>,
     pub(crate) layer: Option<LayerSurface>,
     pub(crate) cursor_shape_manager: CursorShapeManager,
     pointer: Option<wl_pointer::WlPointer>,
@@ -176,6 +178,8 @@ impl<T: 'static + Default + Send> WidgetState<T> {
                 conn,
 
                 mouse_handler: MouseHandler::default(),
+                width: None,
+                height: None,
             }),
             Condvar::new(),
         ));
@@ -192,8 +196,6 @@ impl<T: 'static + Default + Send> WidgetState<T> {
 
             need_redraw: true,
             pool: None,
-            width: None,
-            height: None,
             
             layer: None,
             cursor_shape_manager,
@@ -242,18 +244,19 @@ impl<T: 'static + Default + Send> WidgetState<T> {
             None => return,
             Some(layer) => layer,
         };
-        let width = self.width.unwrap();
-        let height = self.height.unwrap();
-        let stride = width as i32 * 4;
-        let (buffer, canvas) = self.pool
-            .as_mut()
-            .unwrap()
-            .create_buffer(width as i32, height as i32, stride, wl_shm::Format::Argb8888)
-            .expect("Error while creating buffer");
-
+        
         {
             // Protected access to shared_widget for the duration of this block
             let mut shared_widget = self.shared_widget.0.lock().unwrap();
+
+            let width = shared_widget.width.unwrap();
+            let height = shared_widget.height.unwrap();
+            let stride = width as i32 * 4;
+            let (buffer, canvas) = self.pool
+                .as_mut()
+                .unwrap()
+                .create_buffer(width as i32, height as i32, stride, wl_shm::Format::Argb8888)
+                .expect("Error while creating buffer");
 
             // Render with the user render function
             shared_widget.surfaces.sort_by_key(|s| s.id); // TODO: only call this when to_front_of is call on a Surface ?
@@ -261,16 +264,25 @@ impl<T: 'static + Default + Send> WidgetState<T> {
             for i in 0..len {
                 // TODO: surfaces without "need_redraw" do not need redraw if they are not above a redrawed surface
                 let (surface_width, surface_height) = shared_widget.surfaces[i].size.get_dimension(width, height);
-                (shared_widget.surfaces[i].render)(canvas, surface_width.unwrap(), surface_height.unwrap(), &mut shared_widget.app_state); // TODO: Use the position and size of the Surface
+                (shared_widget.surfaces[i].render)(canvas, surface_width, surface_height, &mut shared_widget.app_state); // TODO: Use the position and size of the Surface
 
-                let (x, y) = shared_widget.surfaces[i].position.get_coordinates(width, height, (surface_width.unwrap(), surface_height.unwrap()));
-                layer.wl_surface().damage_buffer(x, y, surface_width.unwrap() as i32, surface_height.unwrap() as i32); // TODO: should damage (and redraw) only when something change (and save that we have applied that change into the Surface)
+                let (x, y) = shared_widget.surfaces[i].position.get_coordinates(width, height, (surface_width, surface_height));
+                layer.wl_surface().damage_buffer(x, y, surface_width as i32, surface_height as i32); // TODO: should damage (and redraw) only when something change (and save that we have applied that change into the Surface)
             }
-        }
 
-        // Attach and commit to present.
-        buffer.attach_to(layer.wl_surface()).expect("buffer attach");
+            // Attach and commit to present.
+            buffer.attach_to(layer.wl_surface()).expect("buffer attach");
+        }
+        
         layer.commit();
+    }
+
+    fn update_size(&mut self, new_width: u32, new_height: u32) {
+        let mut shared_widget = self.shared_widget.0.lock().unwrap();
+        (shared_widget.width, shared_widget.height) = (Some(new_width), Some(new_height));
+        for surface in &mut shared_widget.surfaces {
+            surface.update_size(new_width, new_height);
+        }
     }
 }
 
@@ -347,8 +359,9 @@ impl<T: 'static + Default + Send> OutputHandler for WidgetState<T> {
                     let (top, right, bottom, left) = self.margin.get_margin(screen_width, screen_height);
                     new_layer.set_margin(top, right, bottom, left);
                 }
-                (self.width, self.height) = self.widget_size.get_dimension(screen_width, screen_height);
-                new_layer.set_size(self.width.unwrap(), self.height.unwrap());
+                let (width, height) = self.widget_size.get_dimension(screen_width, screen_height);
+                new_layer.set_size(width, height);
+                self.update_size(width, height);
 
                 // In order for the layer surface to be mapped, we need to perform an initial commit with no attached\
                 // buffer. For more info, see WaylandSurface::commit
@@ -356,7 +369,7 @@ impl<T: 'static + Default + Send> OutputHandler for WidgetState<T> {
                 // surface with the correct options.
                 new_layer.commit();
 
-                self.pool = Some(SlotPool::new((self.width.unwrap() * self.height.unwrap() * 4).try_into().expect("Too large dimension"), &self.shm).expect("Failed to create pool"));
+                self.pool = Some(SlotPool::new((width * height * 4).try_into().expect("Too large dimension"), &self.shm).expect("Failed to create pool"));
                 self.layer = Some(new_layer);
                 {
                     let (lock, _) = self.shared_widget.as_ref();
@@ -386,11 +399,12 @@ impl<T: 'static + Default + Send> OutputHandler for WidgetState<T> {
             let (top, right, bottom, left) = self.margin.get_margin(screen_width, screen_height);
             self.layer.as_mut().unwrap().set_margin(top, right, bottom, left);
         }
-        (self.width, self.height) = self.widget_size.get_dimension(screen_width, screen_height);
-        self.layer.as_mut().unwrap().set_size(self.width.unwrap(), self.height.unwrap());
+        let (width, height) = self.widget_size.get_dimension(screen_width, screen_height);
+        self.layer.as_mut().unwrap().set_size(width, height);
+        self.update_size(width, height);
 
         self.layer.as_mut().unwrap().commit();
-        self.pool = Some(SlotPool::new((self.width.unwrap() * self.height.unwrap() * 4).try_into().expect("Too large dimension"), &self.shm).expect("Failed to create pool"));
+        self.pool = Some(SlotPool::new((width * height * 4).try_into().expect("Too large dimension"), &self.shm).expect("Failed to create pool"));
         self.need_redraw = true;
     }
 

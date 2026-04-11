@@ -152,7 +152,7 @@ pub struct WidgetSize {
 }
 
 impl WidgetSize {
-    pub(crate) fn get_dimension(&self, screen_width: u32, screen_height: u32) -> (Option<u32>, Option<u32>) {
+    pub(crate) fn get_dimension(&self, screen_width: u32, screen_height: u32) -> (u32, u32) {
         let width = match self.width {
             SizeUnit::Percent(percent) => ((screen_width as f32)*percent/100f32) as u32,
             SizeUnit::Pixel(pixel) => pixel,
@@ -161,6 +161,6 @@ impl WidgetSize {
             SizeUnit::Percent(percent) => ((screen_height as f32)*percent/100f32) as u32,
             SizeUnit::Pixel(pixel) => pixel,
         };
-        (Some(width), Some(height))
+        (width, height)
     }
 }

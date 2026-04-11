@@ -2,7 +2,7 @@ use smithay_client_toolkit::{
     reexports::protocols::wp::cursor_shape::v1::client::wp_cursor_shape_device_v1::Shape, seat::pointer::{PointerEvent, PointerEventKind, PointerHandler}, shell::WaylandSurface
 };
 use wayland_client::{Connection, QueueHandle, protocol::wl_pointer};
-use crate::{Widget, WidgetState};
+use crate::{Surface, Widget, WidgetState, widget::SharedWidget};
 
 #[derive(PartialEq)]
 pub enum MouseButton {
@@ -15,8 +15,8 @@ pub enum MouseButton {
 
 #[derive(Default)]
 pub struct MouseHandler<T> {
-    on_press: Option<fn(&mut T, button: &MouseButton) -> MouseResponse>,
-    on_release: Option<fn(&mut T, button: &MouseButton) -> MouseResponse>,
+    pub(crate) on_press: Option<fn(&mut T, button: &MouseButton) -> MouseResponse>,
+    pub(crate) on_release: Option<fn(&mut T, button: &MouseButton) -> MouseResponse>,
 }
 
 pub struct MouseResponse {
@@ -24,12 +24,38 @@ pub struct MouseResponse {
     pub need_redraw: bool,
 }
 
-pub fn default_on_press(button: MouseButton) {
-    // TODO: this may be useless but it's here, easy to be deleted, just in case
+pub fn default_on_press<T>(app_state: &mut T, surfaces: &Vec<Surface<T>>, button: MouseButton, position: (f64, f64)) {
+    for surface in surfaces {
+        if let Some(surface_box) = &surface.real_size {
+            let (x, y) = position;
+            if x >= surface_box.min_x as f64 && x <= surface_box.max_x as f64 {
+                if y >= surface_box.min_y as f64 && y <= surface_box.max_y as f64 {
+                    if let Some(on_press) = surface.mouse_handler.on_press {
+                        on_press(app_state, &button);
+                    } else {
+                        // TODO : Call default_on_press for eventual childs
+                    }
+                }
+            }
+        }
+    }
 }
 
-pub fn default_on_release(button: MouseButton) {
-    // TODO: this may be useless but it's here, easy to be deleted, just in case
+pub fn default_on_release<T>(app_state: &mut T, surfaces: &Vec<Surface<T>>, button: MouseButton, position: (f64, f64)) { // TODO: This is almost the same as default_on_press, should group them
+    for surface in surfaces {
+        if let Some(surface_box) = &surface.real_size {
+            let (x, y) = position;
+            if x >= surface_box.min_x as f64 && x <= surface_box.max_x as f64 {
+                if y >= surface_box.min_y as f64 && y <= surface_box.max_y as f64 {
+                    if let Some(on_release) = surface.mouse_handler.on_release {
+                        on_release(app_state, &button);
+                    } else {
+                        // TODO : Call default_on_release for eventual childs
+                    }
+                }
+            }
+        }
+    }
 }
 
 impl<T> Widget<T> {
@@ -107,7 +133,12 @@ impl<T: 'static + Default + Send> PointerHandler for WidgetState<T> {
                         }
                     }
                     if do_default {
-                        default_on_press(mouse_button);
+                        let SharedWidget {
+                            app_state,
+                            surfaces,
+                            ..
+                        } = &mut *shared_widget;
+                        default_on_press(app_state, surfaces, mouse_button, event.position);
                     }
                 }
                 Release { button, .. } => {
@@ -117,10 +148,21 @@ impl<T: 'static + Default + Send> PointerHandler for WidgetState<T> {
                     };
                     let (lock, _) = self.shared_widget.as_ref();
                     let mut shared_widget = lock.lock().unwrap();
+                    let mut do_default = true;
                     if let Some(on_release) = shared_widget.mouse_handler.on_release {
-                        on_release(&mut shared_widget.app_state, &mouse_button);
-                    } else {
-                        default_on_release(mouse_button);
+                        let mouse_response = on_release(&mut shared_widget.app_state, &mouse_button);
+                        do_default = mouse_response.do_default;
+                        if mouse_response.need_redraw {
+                            shared_widget.ask_redraw(qh);
+                        }
+                    } 
+                    if do_default {
+                        let SharedWidget {
+                            app_state,
+                            surfaces,
+                            ..
+                        } = &mut *shared_widget;
+                        default_on_release(app_state, surfaces, mouse_button, event.position);
                     }
                 }
                 Axis { horizontal, vertical, .. } => {
