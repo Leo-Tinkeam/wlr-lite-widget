@@ -264,7 +264,9 @@ impl<T: 'static + Default + Send> WidgetState<T> {
             for i in 0..len {
                 // TODO: surfaces without "need_redraw" do not need redraw if they are not above a redrawed surface
                 let (surface_width, surface_height) = shared_widget.surfaces[i].size.get_dimension(width, height);
-                (shared_widget.surfaces[i].render)(canvas, surface_width, surface_height, &mut shared_widget.app_state); // TODO: Use the position and size of the Surface
+                if let Some(real_size) = shared_widget.surfaces[i].real_size {
+                    (shared_widget.surfaces[i].render)(canvas, width, height, real_size, &mut shared_widget.app_state);
+                }
 
                 let (x, y) = shared_widget.surfaces[i].position.get_coordinates(width, height, (surface_width, surface_height));
                 layer.wl_surface().damage_buffer(x, y, surface_width as i32, surface_height as i32); // TODO: should damage (and redraw) only when something change (and save that we have applied that change into the Surface)

@@ -7,22 +7,30 @@ pub struct Surface<T> {
     pub(crate) id: i32,
     pub(crate) size: WidgetSize,
     pub(crate) position: WidgetPosition,
-    pub(crate) render: fn(&mut [u8], u32, u32, &mut T), // TODO: Help user to create these for exemple fill_color() and a custom type for advanced shapes
+    pub(crate) render: fn(&mut [u8], u32, u32, SurfaceBox, &mut T), // TODO: Help user to create these for exemple fill_color() and a custom type for advanced shapes
     pub(crate) need_redraw: bool,
     pub(crate) event_sender: Option<Sender<WidgetEvent>>,
     pub(crate) mouse_handler: MouseHandler<T>,
     pub(crate) real_size: Option<SurfaceBox>,
 }
 
-pub(crate) struct SurfaceBox {
+#[derive(Clone, Copy)]
+pub struct SurfaceBox {
     pub(crate) min_x: u32,
     pub(crate) max_x: u32,
     pub(crate) min_y: u32,
     pub(crate) max_y: u32,
 }
 
+impl SurfaceBox {
+    pub fn get_xywh(&self) -> (f32, f32, f32, f32) {
+        let (min_x, max_x, min_y, max_y) = (self.min_x as f32, self.max_x as f32, self.min_y as f32, self.max_y as f32);
+        return (min_x, min_y, max_x-min_x, max_y-min_y);
+    }
+}
+
 impl<T: Default> Surface<T> {
-    pub fn new(size: WidgetSize, position: WidgetPosition, render: fn(&mut [u8], u32, u32, &mut T)) -> Self {
+    pub fn new(size: WidgetSize, position: WidgetPosition, render: fn(&mut [u8], u32, u32, SurfaceBox, &mut T)) -> Self {
         let id = NEXT_SURFACE_ID.fetch_add(1, Ordering::Relaxed);
 
         Surface {
@@ -59,7 +67,7 @@ impl<T: Default> Surface<T> {
         self.draw();
     }
 
-    pub fn edit_render(&mut self, new_render: fn(&mut [u8], u32, u32, &mut T)) {
+    pub fn edit_render(&mut self, new_render: fn(&mut [u8], u32, u32, SurfaceBox, &mut T)) {
         self.render = new_render;
 
         self.draw();
