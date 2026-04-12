@@ -3,15 +3,16 @@ use crate::{MouseButton, MouseHandler, MouseResponse, WidgetPosition, WidgetSize
 
 static NEXT_SURFACE_ID: AtomicI32 = AtomicI32::new(1);
 
-pub struct Surface<T> {
+pub struct Surface<T> { // TODO: optionnal render for virtual surfaces (that only contains others) or maybe use a constant NoRender
     pub(crate) id: i32,
     pub(crate) size: WidgetSize,
     pub(crate) position: WidgetPosition,
     pub(crate) render: fn(&mut [u8], u32, u32, SurfaceBox, &mut T), // TODO: Help user to create these for exemple fill_color() and a custom type for advanced shapes
     pub(crate) need_redraw: bool,
-    pub(crate) event_sender: Option<Sender<WidgetEvent>>,
+    event_sender: Option<Sender<WidgetEvent>>,
     pub(crate) mouse_handler: MouseHandler<T>,
     pub(crate) real_size: Option<SurfaceBox>,
+    pub(crate) childs_surfaces: Vec<Surface<T>>,
 }
 
 #[derive(Clone, Copy)]
@@ -42,6 +43,7 @@ impl<T: Default> Surface<T> {
             event_sender: None,
             mouse_handler: MouseHandler::default(),
             real_size: None,
+            childs_surfaces: vec![],
         }
     }
 
@@ -58,19 +60,19 @@ impl<T: Default> Surface<T> {
     pub fn edit_size(&mut self, new_size: WidgetSize) {
         self.size = new_size;
 
-        self.draw();
+        self.ask_redraw();
     }
 
     pub fn edit_position(&mut self, new_position: WidgetPosition) {
         self.position = new_position;
 
-        self.draw();
+        self.ask_redraw();
     }
 
     pub fn edit_render(&mut self, new_render: fn(&mut [u8], u32, u32, SurfaceBox, &mut T)) {
         self.render = new_render;
 
-        self.draw();
+        self.ask_redraw();
     }
 
     pub fn to_front_of(&mut self, other_surface: &mut Surface<T>) {
@@ -79,12 +81,12 @@ impl<T: Default> Surface<T> {
             self.id = other_surface.id;
             other_surface.id = temp_id;
 
-            self.draw();
-            other_surface.draw();
+            self.ask_redraw();
+            other_surface.ask_redraw();
         }
     }
 
-    fn draw(&mut self) {
+    pub(crate) fn ask_redraw(&mut self) {
         self.need_redraw = true;
         if let Some(sender) = self.event_sender.as_mut() {
             if sender.send(WidgetEvent::Redraw).is_err() {
@@ -93,18 +95,38 @@ impl<T: Default> Surface<T> {
         }
     }
 
-    pub(crate) fn update_size(&mut self, parent_width: u32, parent_height: u32) {
+    pub(crate) fn update_size(&mut self, parent_width: u32, parent_height: u32, parent_x: u32, parent_y: u32) {
         let (size_x, size_y) = self.size.get_dimension(parent_width, parent_height);
         let (min_x, min_y) = self.position.get_coordinates(parent_width, parent_height, (size_x, size_y));
         let (min_x, min_y) = (min_x as u32, min_y as u32);
         self.real_size = Some(SurfaceBox {
-            min_x,
-            max_x: min_x+size_x,
-            min_y,
-            max_y: min_y+size_y,
+            min_x: parent_x+min_x,
+            max_x: parent_x+min_x+size_x,
+            min_y: parent_y+min_y,
+            max_y: parent_y+min_y+size_y,
         });
+        for surface in &mut self.childs_surfaces {
+            surface.update_size(size_x, size_y, min_x, min_y);
+        }
         // TODO: ask for redraw ? (or maybe not here)
-        // TODO: update size of eventual childs
+    }
+
+    pub(crate) fn set_event_sender(&mut self, event_sender: Sender<WidgetEvent>) {
+        for surface in &mut self.childs_surfaces {
+            surface.set_event_sender(event_sender.clone());
+        }
+        self.event_sender = Some(event_sender);
+    }
+
+    pub fn add_surface(&mut self, mut surface: Surface<T>) {
+        if let Some(surface_box) = self.real_size {
+            let (xs, ys, xe, ye) = (surface_box.min_x, surface_box.min_y, surface_box.max_x, surface_box.max_y);
+            surface.update_size(xe-xs, ye-ys, xs, ys);
+        }
+        if let Some(event_sender) = self.event_sender.clone() {
+            surface.set_event_sender(event_sender);
+        }
+        self.childs_surfaces.push(surface);
     }
 
     // We should be able to animate this on "hover" (maybe render with a 0-1 float)

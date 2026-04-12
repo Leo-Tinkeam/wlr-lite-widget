@@ -35,9 +35,9 @@ impl<T: 'static + Default + Send> Widget<T> {
     pub fn add_surface(&mut self, mut surface: Surface<T>) {
         let mut shared_widget = self.shared_widget.0.lock().unwrap();
         if let (Some(width), Some(height)) = (shared_widget.width, shared_widget.height) {
-            surface.update_size(width, height);
+            surface.update_size(width, height, 0, 0);
         }
-        surface.event_sender = Some(shared_widget.event_sender.clone());
+        surface.set_event_sender(shared_widget.event_sender.clone());
         shared_widget.surfaces.push(surface);
     }
 
@@ -259,18 +259,12 @@ impl<T: 'static + Default + Send> WidgetState<T> {
                 .expect("Error while creating buffer");
 
             // Render with the user render function
-            shared_widget.surfaces.sort_by_key(|s| s.id); // TODO: only call this when to_front_of is call on a Surface ?
-            let len = shared_widget.surfaces.len();
-            for i in 0..len {
-                // TODO: surfaces without "need_redraw" do not need redraw if they are not above a redrawed surface
-                let (surface_width, surface_height) = shared_widget.surfaces[i].size.get_dimension(width, height);
-                if let Some(real_size) = shared_widget.surfaces[i].real_size {
-                    (shared_widget.surfaces[i].render)(canvas, width, height, real_size, &mut shared_widget.app_state);
-                }
-
-                let (x, y) = shared_widget.surfaces[i].position.get_coordinates(width, height, (surface_width, surface_height));
-                layer.wl_surface().damage_buffer(x, y, surface_width as i32, surface_height as i32); // TODO: should damage (and redraw) only when something change (and save that we have applied that change into the Surface)
-            }
+             let SharedWidget {
+                app_state,
+                surfaces,
+                ..
+            } = &mut *shared_widget;
+            draw_surfaces(surfaces, app_state, width, height, &layer, canvas, width, height);
 
             // Attach and commit to present.
             buffer.attach_to(layer.wl_surface()).expect("buffer attach");
@@ -283,8 +277,24 @@ impl<T: 'static + Default + Send> WidgetState<T> {
         let mut shared_widget = self.shared_widget.0.lock().unwrap();
         (shared_widget.width, shared_widget.height) = (Some(new_width), Some(new_height));
         for surface in &mut shared_widget.surfaces {
-            surface.update_size(new_width, new_height);
+            surface.update_size(new_width, new_height, 0, 0);
         }
+    }
+}
+
+fn draw_surfaces<T>(surfaces: &mut Vec<Surface<T>>, app_state: &mut T, parent_width: u32, parent_height: u32, layer: &LayerSurface, canvas: &mut [u8], total_width: u32, total_height: u32) {
+    surfaces.sort_by_key(|s| s.id); // TODO: only call this when to_front_of is call on a Surface ?
+    for surface in surfaces {
+        // TODO: surfaces without "need_redraw" do not need redraw if they are not above a redrawed surface
+        let (surface_width, surface_height) = surface.size.get_dimension(parent_width, parent_height);
+        if let Some(real_size) = surface.real_size {
+            (surface.render)(canvas, total_width, total_height, real_size, app_state);
+        }
+
+        let (x, y) = surface.position.get_coordinates(parent_width, parent_height, (surface_width, surface_height));
+        layer.wl_surface().damage_buffer(x, y, surface_width as i32, surface_height as i32); // TODO: should damage (and redraw) only when something change (and save that we have applied that change into the Surface)
+
+        draw_surfaces(&mut surface.childs_surfaces, app_state, surface_width, surface_height, layer, canvas, total_width, total_height);
     }
 }
 

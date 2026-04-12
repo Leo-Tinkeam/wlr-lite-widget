@@ -35,9 +35,15 @@ fn main() {
     });
 
     let position_1 = WidgetPosition::Coordinates(SizeUnit::Percent(50f32), SizeUnit::Pixel(0));
-    let surface2 = Surface::new(
-        half_size,
-        position_1,
+    let mut surface2 = Surface::new(
+        half_size.clone(),
+        position_1.clone(),
+        no_render
+    );
+
+    let surface3 = Surface::new(
+        half_size.clone(),
+        position_0,
         render2
     ).on_press(|my_struct: &mut MyStruct, button| {
         if button == &MouseButton::LEFT {
@@ -46,6 +52,20 @@ fn main() {
         }
         return MouseResponse { do_default: false, need_redraw: false };
     });
+    let surface4 = Surface::new(
+        half_size,
+        position_1,
+        render3
+    ).on_press(|my_struct: &mut MyStruct, button| {
+        if button == &MouseButton::LEFT {
+            my_struct.clicked = true;
+            return MouseResponse { do_default: true, need_redraw: true };
+        }
+        return MouseResponse { do_default: false, need_redraw: false };
+    });
+
+    surface2.add_surface(surface3);
+    surface2.add_surface(surface4);
 
     let widget_position = WidgetPosition::Coordinates(SizeUnit::Percent(10f32), SizeUnit::Percent(10f32));
 
@@ -79,6 +99,8 @@ fn main() {
 
     println!("--- Fin de l'exemple ---");
 }
+
+fn no_render(_canvas: &mut [u8], _widget_width: u32, _widget_height: u32, _surface_box: SurfaceBox, _app_state: &mut MyStruct) {}
 
 fn render(canvas: &mut [u8], widget_width: u32, widget_height: u32, surface_box: SurfaceBox, app_state: &mut MyStruct) {
     // 1. Création de la Pixmap "wrapper"
@@ -124,6 +146,36 @@ fn render2(canvas: &mut [u8], widget_width: u32, widget_height: u32, surface_box
         Color::from_rgba8(255, 0, 0, 255)
     } else {
         Color::from_rgba8(0, 255, 0, 255)
+    };
+
+    // Configuration du "pinceau"
+    let mut paint = Paint::default();
+    paint.set_color(color);
+    // paint.anti_alias = true; // Pas utile pour un rectangle droit, mais utile pour des cercles ou formes avancées
+
+    println!("Drawing 2!");
+    // 3. Dessin du rectangle
+    if let Some(rect) = Rect::from_xywh(x, y, w, h) {
+        // Transform::identity() veut dire "pas de rotation/zoom"
+        // None est pour le clipping mask (masque d'écrêtage)
+        pixmap.fill_rect(rect, &paint, Transform::identity(), None);
+    }
+}
+
+fn render3(canvas: &mut [u8], widget_width: u32, widget_height: u32, surface_box: SurfaceBox, app_state: &mut MyStruct) {
+    // 1. Création de la Pixmap "wrapper"
+    let mut pixmap = PixmapMut::from_bytes(
+        canvas, 
+        widget_width,
+        widget_height,
+    ).expect("Erreur taille buffer / stride");
+    let (x, y, w, h) = surface_box.get_xywh();
+
+    // Choix de la couleur
+    let color = if !app_state.clicked {
+        Color::from_rgba8(0, 255, 0, 255)
+    } else {
+        Color::from_rgba8(0, 0, 255, 255)
     };
 
     // Configuration du "pinceau"

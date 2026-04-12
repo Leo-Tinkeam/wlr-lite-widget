@@ -24,16 +24,22 @@ pub struct MouseResponse {
     pub need_redraw: bool,
 }
 
-pub fn default_on_press<T>(app_state: &mut T, surfaces: &Vec<Surface<T>>, button: MouseButton, position: (f64, f64)) {
+pub fn default_on_press<T: Default>(app_state: &mut T, surfaces: &mut Vec<Surface<T>>, button: &MouseButton, position: (f64, f64)) {
     for surface in surfaces {
         if let Some(surface_box) = &surface.real_size {
             let (x, y) = position;
             if x >= surface_box.min_x as f64 && x <= surface_box.max_x as f64 {
                 if y >= surface_box.min_y as f64 && y <= surface_box.max_y as f64 {
+                    let mut do_default = true;
                     if let Some(on_press) = surface.mouse_handler.on_press {
-                        on_press(app_state, &button);
-                    } else {
-                        // TODO : Call default_on_press for eventual childs
+                        let mouse_response = on_press(app_state, button);
+                        do_default = mouse_response.do_default;
+                        /* if mouse_response.need_redraw {
+                            surface.draw();
+                        } */ // Should be usefull ?
+                    }
+                    if do_default {
+                        default_on_press(app_state, &mut surface.childs_surfaces, button, position);
                     }
                 }
             }
@@ -41,16 +47,22 @@ pub fn default_on_press<T>(app_state: &mut T, surfaces: &Vec<Surface<T>>, button
     }
 }
 
-pub fn default_on_release<T>(app_state: &mut T, surfaces: &Vec<Surface<T>>, button: MouseButton, position: (f64, f64)) { // TODO: This is almost the same as default_on_press, should group them
+pub fn default_on_release<T>(app_state: &mut T, surfaces: &mut Vec<Surface<T>>, button: &MouseButton, position: (f64, f64)) { // TODO: This is almost the same as default_on_press, should group them
     for surface in surfaces {
         if let Some(surface_box) = &surface.real_size {
             let (x, y) = position;
             if x >= surface_box.min_x as f64 && x <= surface_box.max_x as f64 {
                 if y >= surface_box.min_y as f64 && y <= surface_box.max_y as f64 {
+                    let mut do_default = true;
                     if let Some(on_release) = surface.mouse_handler.on_release {
-                        on_release(app_state, &button);
-                    } else {
-                        // TODO : Call default_on_release for eventual childs
+                        let mouse_response = on_release(app_state, button);
+                        do_default = mouse_response.do_default;
+                        /* if mouse_response.need_redraw {
+                            surface.draw();
+                        } */ // Should be usefull ?
+                    }
+                    if do_default {
+                        default_on_release(app_state, &mut surface.childs_surfaces, button, position);
                     }
                 }
             }
@@ -138,7 +150,7 @@ impl<T: 'static + Default + Send> PointerHandler for WidgetState<T> {
                             surfaces,
                             ..
                         } = &mut *shared_widget;
-                        default_on_press(app_state, surfaces, mouse_button, event.position);
+                        default_on_press(app_state, surfaces, &mouse_button, event.position);
                     }
                 }
                 Release { button, .. } => {
@@ -162,7 +174,7 @@ impl<T: 'static + Default + Send> PointerHandler for WidgetState<T> {
                             surfaces,
                             ..
                         } = &mut *shared_widget;
-                        default_on_release(app_state, surfaces, mouse_button, event.position);
+                        default_on_release(app_state, surfaces, &mouse_button, event.position);
                     }
                 }
                 Axis { horizontal, vertical, .. } => {
