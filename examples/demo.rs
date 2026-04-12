@@ -87,8 +87,8 @@ fn main() {
         loop {
             my_state.clicked = !my_state.clicked;
             thread_widget.update_app_state(my_state.clone());
-            thread_widget.redraw();
-            thread::sleep(Duration::from_secs(1));
+            thread_widget.force_redraw();
+            thread::sleep(Duration::from_secs(10));
             if !thread_widget.is_running() {
                 break;
             }

@@ -60,8 +60,9 @@ impl<T: 'static + Default + Send> Widget<T> {
         true
     }
 
-    pub fn redraw(&self) {
-        let shared_widget = self.shared_widget.0.lock().unwrap();
+    pub fn force_redraw(&self) {
+        let mut shared_widget = self.shared_widget.0.lock().unwrap();
+        shared_widget.force_redraw = true;
         if shared_widget.event_sender.send(WidgetEvent::Redraw).is_err() {
             println!("Error: redraw not sent");
         };
@@ -79,6 +80,7 @@ pub(crate) struct SharedWidget<T> {
     pub(crate) surfaces: Vec<Surface<T>>,
     event_sender: Sender<WidgetEvent>,
     frame_asked: bool,
+    force_redraw: bool,
     wl_surface: Option<wl_surface::WlSurface>,
     conn: Connection,
 
@@ -174,6 +176,7 @@ impl<T: 'static + Default + Send> WidgetState<T> {
                 surfaces: vec![],
                 event_sender: tx,
                 frame_asked: false,
+                force_redraw: false,
                 wl_surface: None,
                 conn,
 
@@ -259,12 +262,14 @@ impl<T: 'static + Default + Send> WidgetState<T> {
                 .expect("Error while creating buffer");
 
             // Render with the user render function
-             let SharedWidget {
+            let SharedWidget {
                 app_state,
                 surfaces,
+                force_redraw,
                 ..
             } = &mut *shared_widget;
-            draw_surfaces(surfaces, app_state, width, height, &layer, canvas, width, height);
+            draw_surfaces(surfaces, app_state, width, height, &layer, canvas, width, height, *force_redraw);
+            shared_widget.force_redraw = false;
 
             // Attach and commit to present.
             buffer.attach_to(layer.wl_surface()).expect("buffer attach");
@@ -282,19 +287,22 @@ impl<T: 'static + Default + Send> WidgetState<T> {
     }
 }
 
-fn draw_surfaces<T>(surfaces: &mut Vec<Surface<T>>, app_state: &mut T, parent_width: u32, parent_height: u32, layer: &LayerSurface, canvas: &mut [u8], total_width: u32, total_height: u32) {
+fn draw_surfaces<T>(surfaces: &mut Vec<Surface<T>>, app_state: &mut T, parent_width: u32, parent_height: u32, layer: &LayerSurface, canvas: &mut [u8], total_width: u32, total_height: u32, force_redraw: bool) {
     surfaces.sort_by_key(|s| s.id); // TODO: only call this when to_front_of is call on a Surface ?
     for surface in surfaces {
-        // TODO: surfaces without "need_redraw" do not need redraw if they are not above a redrawed surface
+        // TODO: should redraw surfaces without need_redraw if they are above a redrawed surfaces (since they are sorted before the for loop, this should be easy)
         let (surface_width, surface_height) = surface.size.get_dimension(parent_width, parent_height);
-        if let Some(real_size) = surface.real_size {
-            (surface.render)(canvas, total_width, total_height, real_size, app_state);
+        let mut force_child_redraw = false;
+        if surface.need_redraw || force_redraw {
+            force_child_redraw = true;
+            if let Some(real_size) = surface.real_size {
+                surface.need_redraw = false;
+                (surface.render)(canvas, total_width, total_height, real_size, app_state);
+                layer.wl_surface().damage_buffer(real_size.min_x as i32, real_size.min_y as i32, surface_width as i32, surface_height as i32); // TODO: maybe surface.render should return the area to damage (to accept damaging more than his area for shadow or restrict to a smaller area)
+            }
         }
 
-        let (x, y) = surface.position.get_coordinates(parent_width, parent_height, (surface_width, surface_height));
-        layer.wl_surface().damage_buffer(x, y, surface_width as i32, surface_height as i32); // TODO: should damage (and redraw) only when something change (and save that we have applied that change into the Surface)
-
-        draw_surfaces(&mut surface.childs_surfaces, app_state, surface_width, surface_height, layer, canvas, total_width, total_height);
+        draw_surfaces(&mut surface.childs_surfaces, app_state, surface_width, surface_height, layer, canvas, total_width, total_height, force_child_redraw);
     }
 }
 
