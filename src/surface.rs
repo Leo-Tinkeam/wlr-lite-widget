@@ -5,7 +5,9 @@ use crate::{MouseButton, MouseHandler, MouseResponse, WidgetPosition, WidgetSize
 
 static NEXT_SURFACE_ID: AtomicI32 = AtomicI32::new(1);
 
-pub struct Surface<T> { // TODO: optionnal render for virtual surfaces (that only contains others) or maybe use a constant NoRender
+pub fn no_render<T>(_canvas: &mut [u8], _widget_width: u32, _widget_height: u32, _surface_box: SurfaceBox, _app_state: &mut T) {}
+
+pub struct Surface<T> {
     pub(crate) id: i32,
     pub(crate) size: WidgetSize,
     pub(crate) position: WidgetPosition,

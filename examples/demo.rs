@@ -1,4 +1,4 @@
-use wlr_lite_widget::{MouseButton, MouseResponse, SizeUnit, Surface, SurfaceBox, Widget, WidgetPosition, WidgetSize};
+use wlr_lite_widget::{MouseButton, MouseResponse, SizeUnit, Surface, SurfaceBox, Widget, WidgetPosition, WidgetSize, no_render};
 use tiny_skia::{PixmapMut, Color, Paint, Rect, Transform};
 use std::thread;
 use std::time::Duration;
@@ -99,8 +99,6 @@ fn main() {
 
     println!("--- Fin de l'exemple ---");
 }
-
-fn no_render(_canvas: &mut [u8], _widget_width: u32, _widget_height: u32, _surface_box: SurfaceBox, _app_state: &mut MyStruct) {}
 
 fn render(canvas: &mut [u8], widget_width: u32, widget_height: u32, surface_box: SurfaceBox, app_state: &mut MyStruct) {
     // 1. Création de la Pixmap "wrapper"
