@@ -1,5 +1,5 @@
 use smithay_client_toolkit::{
-    reexports::protocols::wp::cursor_shape::v1::client::wp_cursor_shape_device_v1::Shape, seat::pointer::{PointerEvent, PointerEventKind, PointerHandler}, shell::WaylandSurface
+    reexports::protocols::wp::cursor_shape::v1::client::wp_cursor_shape_device_v1::Shape, seat::pointer::{AxisScroll, PointerEvent, PointerEventKind, PointerHandler}, shell::WaylandSurface
 };
 use wayland_client::{Connection, QueueHandle, protocol::wl_pointer};
 use crate::{Surface, Widget, WidgetState, widget::SharedWidget};
@@ -15,8 +15,12 @@ pub enum MouseButton {
 
 #[derive(Default)]
 pub struct MouseHandler<T> {
+    pub(crate) on_enter: Option<fn(&mut T) -> MouseResponse>,
+    pub(crate) on_leave: Option<fn(&mut T) -> MouseResponse>,
+    pub(crate) on_motion: Option<fn(&mut T, (f64, f64)) -> MouseResponse>,
     pub(crate) on_press: Option<fn(&mut T, button: &MouseButton) -> MouseResponse>,
     pub(crate) on_release: Option<fn(&mut T, button: &MouseButton) -> MouseResponse>,
+    pub(crate) on_scroll: Option<fn(&mut T, AxisScroll, AxisScroll) -> MouseResponse>,
 }
 
 pub struct MouseResponse {
@@ -44,43 +48,97 @@ where
     need_redraw
 }
 
-pub fn default_on_press<T: Default>(app_state: &mut T, surfaces: &mut Vec<Surface<T>>, button: &MouseButton, position: (f64, f64)) {
-    for surface in surfaces {
-        if let Some(surface_box) = &surface.real_size {
-            let (x, y) = position;
-            if x >= surface_box.min_x as f64 && x <= surface_box.max_x as f64 {
-                if y >= surface_box.min_y as f64 && y <= surface_box.max_y as f64 {
-                    if call_mouse_action(
-                        surface.mouse_handler.on_press.map(|on_press| move |app_state: &mut T| { on_press(app_state, button) }),
-                        |app_state, surfaces| default_on_press(app_state, surfaces, button, position),
-                        app_state,
-                        &mut surface.childs_surfaces
-                    ) {
-                        surface.ask_redraw();
-                    }
+pub fn default_mouse_action<T: Default, F, D>(on_action_option: Option<F>, on_action_default: D, app_state: &mut T, surface: &mut Surface<T>, position: (f64, f64))
+where 
+    F: FnOnce(&mut T) -> MouseResponse,
+    D: FnOnce(&mut T, &mut Vec<Surface<T>>),
+{
+    if let Some(surface_box) = &surface.real_size {
+        let (x, y) = position;
+        if x >= surface_box.min_x as f64 && x <= surface_box.max_x as f64 {
+            if y >= surface_box.min_y as f64 && y <= surface_box.max_y as f64 {
+                if call_mouse_action(
+                    on_action_option,
+                    on_action_default,
+                    app_state,
+                    &mut surface.childs_surfaces
+                ) {
+                    surface.ask_redraw();
                 }
             }
         }
     }
 }
 
-pub fn default_on_release<T: Default>(app_state: &mut T, surfaces: &mut Vec<Surface<T>>, button: &MouseButton, position: (f64, f64)) { // TODO: This is almost the same as default_on_press, should group them
+pub fn default_on_enter<T: Default>(app_state: &mut T, surfaces: &mut Vec<Surface<T>>, position: (f64, f64)) {
     for surface in surfaces {
-        if let Some(surface_box) = &surface.real_size {
-            let (x, y) = position;
-            if x >= surface_box.min_x as f64 && x <= surface_box.max_x as f64 {
-                if y >= surface_box.min_y as f64 && y <= surface_box.max_y as f64 {
-                    if call_mouse_action(
-                        surface.mouse_handler.on_release.map(|on_release| move |app_state: &mut T| { on_release(app_state, button) }),
-                        |app_state, surfaces| default_on_release(app_state, surfaces, button, position),
-                        app_state,
-                        &mut surface.childs_surfaces
-                    ) {
-                        surface.ask_redraw();
-                    }
-                }
-            }
-        }
+        default_mouse_action(
+            surface.mouse_handler.on_enter.map(|on_enter| move |app_state: &mut T| { on_enter(app_state) }),
+            |app_state, surfaces| default_on_enter(app_state, surfaces, position),
+            app_state,
+            surface,
+            position
+        );
+    }
+}
+
+pub fn default_on_leave<T: Default>(app_state: &mut T, surfaces: &mut Vec<Surface<T>>, position: (f64, f64)) {
+    for surface in surfaces {
+        default_mouse_action(
+            surface.mouse_handler.on_leave.map(|on_leave| move |app_state: &mut T| { on_leave(app_state) }),
+            |app_state, surfaces| default_on_leave(app_state, surfaces, position),
+            app_state,
+            surface,
+            position
+        );
+    }
+}
+
+pub fn default_on_motion<T: Default>(app_state: &mut T, surfaces: &mut Vec<Surface<T>>, position: (f64, f64)) {
+    for surface in surfaces {
+        default_mouse_action(
+            surface.mouse_handler.on_motion.map(|on_motion| move |app_state: &mut T| { on_motion(app_state, position) }),
+            |app_state, surfaces| default_on_motion(app_state, surfaces, position),
+            app_state,
+            surface,
+            position
+        );
+    }
+}
+
+pub fn default_on_press<T: Default>(app_state: &mut T, surfaces: &mut Vec<Surface<T>>, button: &MouseButton, position: (f64, f64)) {
+    for surface in surfaces {
+        default_mouse_action(
+            surface.mouse_handler.on_press.map(|on_press| move |app_state: &mut T| { on_press(app_state, button) }),
+            |app_state, surfaces| default_on_press(app_state, surfaces, button, position),
+            app_state,
+            surface,
+            position
+        );
+    }
+}
+
+pub fn default_on_release<T: Default>(app_state: &mut T, surfaces: &mut Vec<Surface<T>>, button: &MouseButton, position: (f64, f64)) {
+    for surface in surfaces {
+        default_mouse_action(
+            surface.mouse_handler.on_release.map(|on_release| move |app_state: &mut T| { on_release(app_state, button) }),
+            |app_state, surfaces| default_on_release(app_state, surfaces, button, position),
+            app_state,
+            surface,
+            position
+        );
+    }
+}
+
+pub fn default_on_scroll<T: Default>(app_state: &mut T, surfaces: &mut Vec<Surface<T>>, horizontal: AxisScroll, vertical: AxisScroll, position: (f64, f64)) {
+    for surface in surfaces {
+        default_mouse_action(
+            surface.mouse_handler.on_scroll.map(|on_scroll| move |app_state: &mut T| { on_scroll(app_state, horizontal, vertical) }),
+            |app_state, surfaces| default_on_scroll(app_state, surfaces, horizontal, vertical, position),
+            app_state,
+            surface,
+            position
+        );
     }
 }
 
@@ -130,35 +188,88 @@ impl<T: 'static + Default + Send> PointerHandler for WidgetState<T> {
             }
             match event.kind {
                 Enter { serial } => {
+                    // TODO: use this for hover animation
+
                     // Set mouse texture
                     let device = self.cursor_shape_manager.get_shape_device(pointer, qh);
                     device.set_shape(serial, Shape::Default);
                     device.destroy();
 
-                    // TODO: use this for hover animation
-                    // TODO: Appeler un onEnter
-                }
-                Leave { .. } => {
-                    // TODO: use this for hover animation
-                    // TODO: Appeler un onLeave
-                }
-                Motion { .. } => {
-                    // TODO: appeler un onMotion
-                }
-                Press { button, .. } => {
-                    let mouse_button = match parse_mouse_button(button) {
-                        Some(s) => s,
-                        None => return,
-                    };
+                    // Get variable for on_enter call
                     let (lock, _) = self.shared_widget.as_ref();
                     let mut shared_widget = lock.lock().unwrap();
-
                     let SharedWidget {
                         app_state,
                         surfaces,
                         mouse_handler,
                         ..
                     } = &mut *shared_widget;
+
+                    // Call of on_enter
+                    if call_mouse_action(
+                        mouse_handler.on_enter.map(|on_enter| move |app_state: &mut T| { on_enter(app_state) }),
+                        |app_state, surfaces| default_on_enter(app_state, surfaces, event.position),
+                        app_state,
+                        surfaces
+                    ) {
+                        shared_widget.ask_redraw(qh)
+                    }
+                }
+                Leave { .. } => {
+                    // TODO: use this for hover animation
+
+                    let (lock, _) = self.shared_widget.as_ref();
+                    let mut shared_widget = lock.lock().unwrap();
+                    let SharedWidget {
+                        app_state,
+                        surfaces,
+                        mouse_handler,
+                        ..
+                    } = &mut *shared_widget;
+
+                    if call_mouse_action(
+                        mouse_handler.on_leave.map(|on_leave| move |app_state: &mut T| { on_leave(app_state) }),
+                        |app_state, surfaces| default_on_leave(app_state, surfaces, event.position),
+                        app_state,
+                        surfaces
+                    ) {
+                        shared_widget.ask_redraw(qh)
+                    }
+                }
+                Motion { .. } => {
+                    let (lock, _) = self.shared_widget.as_ref();
+                    let mut shared_widget = lock.lock().unwrap();
+                    let SharedWidget {
+                        app_state,
+                        surfaces,
+                        mouse_handler,
+                        ..
+                    } = &mut *shared_widget;
+
+                    if call_mouse_action(
+                        mouse_handler.on_motion.map(|on_motion| move |app_state: &mut T| { on_motion(app_state, event.position) }),
+                        |app_state, surfaces| default_on_motion(app_state, surfaces, event.position),
+                        app_state,
+                        surfaces
+                    ) {
+                        shared_widget.ask_redraw(qh)
+                    }
+                }
+                Press { button, .. } => {
+                    let mouse_button = match parse_mouse_button(button) {
+                        Some(s) => s,
+                        None => return,
+                    };
+
+                    let (lock, _) = self.shared_widget.as_ref();
+                    let mut shared_widget = lock.lock().unwrap();
+                    let SharedWidget {
+                        app_state,
+                        surfaces,
+                        mouse_handler,
+                        ..
+                    } = &mut *shared_widget;
+
                     let mouse_button_clone = mouse_button.clone();
                     if call_mouse_action(
                         mouse_handler.on_press.map(|on_press| move |app_state: &mut T| { on_press(app_state, &mouse_button) }),
@@ -185,7 +296,7 @@ impl<T: 'static + Default + Send> PointerHandler for WidgetState<T> {
                     } = &mut *shared_widget;
                     let mouse_button_clone = mouse_button.clone();
                     if call_mouse_action(
-                        mouse_handler.on_release.map(|on_realease| move |app_state: &mut T| { on_realease(app_state, &mouse_button) }),
+                        mouse_handler.on_release.map(|on_release| move |app_state: &mut T| { on_release(app_state, &mouse_button) }),
                         |app_state, surfaces| default_on_release(app_state, surfaces, &mouse_button_clone, event.position),
                         app_state,
                         surfaces
@@ -194,7 +305,23 @@ impl<T: 'static + Default + Send> PointerHandler for WidgetState<T> {
                     }
                 }
                 Axis { horizontal, vertical, .. } => {
-                    // TODO: Appeler un onScroll
+                    let (lock, _) = self.shared_widget.as_ref();
+                    let mut shared_widget = lock.lock().unwrap();
+                    let SharedWidget {
+                        app_state,
+                        surfaces,
+                        mouse_handler,
+                        ..
+                    } = &mut *shared_widget;
+
+                    if call_mouse_action(
+                        mouse_handler.on_scroll.map(|on_scroll| move |app_state: &mut T| { on_scroll(app_state, horizontal, vertical) }),
+                        |app_state, surfaces| default_on_scroll(app_state, surfaces, horizontal, vertical, event.position),
+                        app_state,
+                        surfaces
+                    ) {
+                        shared_widget.ask_redraw(qh)
+                    }
                 }
             }
         }

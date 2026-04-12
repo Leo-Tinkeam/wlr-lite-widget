@@ -1,4 +1,6 @@
 use std::sync::{atomic::{AtomicI32, Ordering}, mpsc::Sender};
+use smithay_client_toolkit::seat::pointer::AxisScroll;
+
 use crate::{MouseButton, MouseHandler, MouseResponse, WidgetPosition, WidgetSize, widget::WidgetEvent};
 
 static NEXT_SURFACE_ID: AtomicI32 = AtomicI32::new(1);
@@ -47,6 +49,21 @@ impl<T: Default> Surface<T> {
         }
     }
 
+    pub fn on_enter(mut self, func: fn(&mut T) -> MouseResponse) -> Self {
+        self.mouse_handler.on_enter = Some(func);
+        self
+    }
+
+    pub fn on_leave(mut self, func: fn(&mut T) -> MouseResponse) -> Self {
+        self.mouse_handler.on_leave = Some(func);
+        self
+    }
+
+    pub fn on_motion(mut self, func: fn(&mut T, (f64, f64)) -> MouseResponse) -> Self {
+        self.mouse_handler.on_motion = Some(func);
+        self
+    }
+
     pub fn on_press(mut self, func: fn(&mut T, button: &MouseButton) -> MouseResponse) -> Self {
         self.mouse_handler.on_press = Some(func);
         self
@@ -54,6 +71,11 @@ impl<T: Default> Surface<T> {
 
     pub fn on_release(mut self, func: fn(&mut T, button: &MouseButton) -> MouseResponse) -> Self {
         self.mouse_handler.on_release = Some(func);
+        self
+    }
+
+    pub fn on_scroll(mut self, func: fn(&mut T, AxisScroll, AxisScroll) -> MouseResponse) -> Self {
+        self.mouse_handler.on_scroll = Some(func);
         self
     }
 
