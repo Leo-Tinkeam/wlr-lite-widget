@@ -16,11 +16,11 @@ use smithay_client_toolkit::{
     },
     shm::{Shm, ShmHandler, slot::SlotPool},
 };
-use std::{sync::{Arc, Condvar, Mutex, mpsc::{Receiver, Sender, channel}}, thread};
+use std::sync::{Arc, Condvar, Mutex, mpsc::Sender};
 use wayland_client::{
-    Connection, Dispatch, QueueHandle, globals::registry_queue_init, protocol::{wl_callback, wl_output, wl_pointer, wl_seat, wl_shm, wl_surface}
+    Connection, Dispatch, QueueHandle, protocol::{wl_callback, wl_output, wl_pointer, wl_seat, wl_shm, wl_surface}
 };
-use crate::{Margin, MouseHandler, SizeUnit, Surface, WidgetAnchor, WidgetPosition, WidgetSize};
+use crate::{Margin, MouseHandler, Surface, WidgetSize};
 
 #[derive(Clone)]
 pub struct Widget<T> {
@@ -28,10 +28,6 @@ pub struct Widget<T> {
 }
 
 impl<T: 'static + Default + Send> Widget<T> {
-    pub fn new(size: WidgetSize, position: WidgetPosition, name: String, layer: Option<Layer>) -> Self {
-        WidgetState::create(size, position, name, layer)
-    }
-
     pub fn add_surface(&mut self, mut surface: Surface<T>) {
         let mut shared_widget = self.shared_widget.0.lock().unwrap();
         if let (Some(width), Some(height)) = (shared_widget.width, shared_widget.height) {
@@ -75,18 +71,18 @@ impl<T: 'static + Default + Send> Widget<T> {
 }
 
 pub(crate) struct SharedWidget<T> {
-    exit: bool, 
+    pub(crate) exit: bool, 
     pub(crate) app_state: T,
     pub(crate) surfaces: Vec<Surface<T>>,
-    event_sender: Sender<WidgetEvent>,
-    frame_asked: bool,
-    force_redraw: bool,
-    wl_surface: Option<wl_surface::WlSurface>,
-    conn: Connection,
+    pub(crate) event_sender: Sender<WidgetEvent>,
+    pub(crate) frame_asked: bool,
+    pub(crate) force_redraw: bool,
+    pub(crate) wl_surface: Option<wl_surface::WlSurface>,
+    pub(crate) conn: Connection,
 
     pub(crate) mouse_handler: MouseHandler<T>,
-    width: Option<u32>,
-    height: Option<u32>,
+    pub(crate) width: Option<u32>,
+    pub(crate) height: Option<u32>,
 }
 
 impl<T: 'static + Default + Send> SharedWidget<T> {
@@ -108,140 +104,29 @@ pub(crate) enum WidgetEvent {
 }
 
 pub(crate) struct WidgetState<T> {
-    registry_state: RegistryState,
-    seat_state: SeatState,
-    output_state: OutputState,
-    shm: Shm,
-    compositor: CompositorState,
-    layer_shell: LayerShell,
+    pub(crate) registry_state: RegistryState,
+    pub(crate) seat_state: SeatState,
+    pub(crate) output_state: OutputState,
+    pub(crate) shm: Shm,
+    pub(crate) compositor: CompositorState,
+    pub(crate) layer_shell: LayerShell,
 
-    need_redraw: bool,
-    pool: Option<SlotPool>,
+    pub(crate) need_redraw: bool,
+    pub(crate) pool: Option<SlotPool>,
     pub(crate) layer: Option<LayerSurface>,
     pub(crate) cursor_shape_manager: CursorShapeManager,
-    pointer: Option<wl_pointer::WlPointer>,
+    pub(crate) pointer: Option<wl_pointer::WlPointer>,
 
-    widget_size: WidgetSize,
-    widget_name: String,
-    widget_layer: Layer,
-    widget_anchor: Option<Anchor>,
-    margin: Margin,
+    pub(crate) widget_size: WidgetSize,
+    pub(crate) widget_name: String,
+    pub(crate) widget_layer: Layer,
+    pub(crate) widget_anchor: Option<Anchor>,
+    pub(crate) margin: Margin,
 
     pub(crate) shared_widget: Arc<(Mutex<SharedWidget<T>>, Condvar)>,
 }
 
 impl<T: 'static + Default + Send> WidgetState<T> {
-    fn create(size: WidgetSize, position: WidgetPosition, name: String, layer: Option<Layer>) -> Widget<T> {
-        // Connecting to the compositor (server)
-        let conn = Connection::connect_to_env().unwrap();
-
-        // Enumerate the list of globals to get the protocols the server implements.
-        let (globals, mut event_queue) = registry_queue_init(&conn).unwrap();
-        let qh: QueueHandle<WidgetState<T>> = event_queue.handle();
-
-        // The compositor (not to be confused with the server which is commonly called the compositor) allows
-        // configuring surfaces to be presented.
-        let compositor = CompositorState::bind(&globals, &qh).expect("wl_compositor is not available");
-
-        // This app uses the wlr layer shell, which may not be available with every compositor.
-        let layer_shell = LayerShell::bind(&globals, &qh).expect("layer shell is not available");
-        let cursor_shape_manager = CursorShapeManager::bind(&globals, &qh).expect("cursor manager is not available");
-
-        // We use wl_shm to allow software rendering to a buffer we share with the compositor process.
-        let shm = Shm::bind(&globals, &qh).expect("wl_shm is not available");
-
-        let (widget_anchor, margin) = match position {
-            WidgetPosition::Coordinates(x, y) => {(
-                WidgetAnchor::TopLeft.into(),
-                Margin {
-                    top: y,
-                    right: SizeUnit::Pixel(0),
-                    bottom: SizeUnit::Pixel(0),
-                    left: x,
-                }
-            )},
-            WidgetPosition::Anchor(anchor, margin_temp) => {
-                (
-                    anchor.clone().into(),
-                    margin_temp.unwrap_or_default().into_margin(anchor),
-                )
-            }
-        };
-
-        let (tx, rx): (Sender<WidgetEvent>, Receiver<WidgetEvent>) = channel();
-        let shared_widget = Arc::new((
-            Mutex::new(SharedWidget {
-                exit: false,
-                app_state: T::default(),
-                surfaces: vec![],
-                event_sender: tx,
-                frame_asked: false,
-                force_redraw: false,
-                wl_surface: None,
-                conn,
-
-                mouse_handler: MouseHandler::default(),
-                width: None,
-                height: None,
-            }),
-            Condvar::new(),
-        ));
-
-        let mut widget_state = WidgetState {
-            // Seats and outputs may be hotplugged at runtime, therefore we need to setup a registry state to
-            // listen for seats and outputs.
-            registry_state: RegistryState::new(&globals),
-            seat_state: SeatState::new(&globals, &qh),
-            output_state: OutputState::new(&globals, &qh),
-            shm,
-            compositor: compositor,
-            layer_shell: layer_shell,
-
-            need_redraw: true,
-            pool: None,
-            
-            layer: None,
-            cursor_shape_manager,
-            pointer: None,
-
-            widget_size: size,
-            widget_name: name,
-            widget_layer: layer.unwrap_or(Layer::Background),
-            widget_anchor,
-            margin,
-
-            shared_widget: Arc::clone(&shared_widget),
-        };
-
-        thread::spawn(move || {
-            loop {
-                event_queue.blocking_dispatch(&mut widget_state).unwrap();
-                {
-                    let shared_widget = widget_state.shared_widget.0.lock().unwrap();
-                    if shared_widget.exit {
-                        break;
-                    }
-                }
-            }
-        });
-
-        let shared_widget_clone = Arc::clone(&shared_widget);
-        thread::spawn(move || {
-            while let Ok(event) = rx.recv() {
-                match event {
-                    WidgetEvent::Exit => return,
-                    WidgetEvent::Redraw => {
-                        shared_widget_clone.0.lock().unwrap().ask_redraw(&qh);
-                    },
-                }
-            }
-        });
-
-        Widget {
-            shared_widget: shared_widget,
-        }
-    }
-
     pub fn draw(&mut self) {
         let layer = match self.layer.clone() {
             None => return,
