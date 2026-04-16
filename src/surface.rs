@@ -1,22 +1,22 @@
 use std::sync::{atomic::{AtomicI32, Ordering}, mpsc::Sender};
 use smithay_client_toolkit::seat::pointer::AxisScroll;
 
-use crate::{MouseButton, MouseHandler, MouseResponse, WidgetPosition, WidgetSize, widget::WidgetEvent};
+use crate::{MouseButton, MouseHandler, MouseResponse, WidgetPosition, WidgetSize, widget::WidgetEvent, widget_builder::DrawAreaType};
 
 static NEXT_SURFACE_ID: AtomicI32 = AtomicI32::new(1);
 
-pub fn no_render<T>(_canvas: &mut [u8], _widget_width: u32, _widget_height: u32, _surface_box: SurfaceBox, _app_state: &mut T) {}
+pub fn no_render<'a, T, U: DrawAreaType>(_canvas: &mut U::Type<'a>, _widget_width: u32, _widget_height: u32, _surface_box: SurfaceBox, _app_state: &mut T) {}
 
-pub struct Surface<T> {
+pub struct Surface<T, U: DrawAreaType> {
     pub(crate) id: i32,
     pub(crate) size: WidgetSize,
     pub(crate) position: WidgetPosition,
-    pub(crate) render: fn(&mut [u8], u32, u32, SurfaceBox, &mut T), // TODO: Help user to create these for exemple fill_color() and a custom type for advanced shapes
+    pub(crate) render: Box<dyn for<'a> FnMut(&mut U::Type<'a>, u32, u32, SurfaceBox, &mut T) + Send>, // TODO: Help user to create these for exemple fill_color() and a custom type for advanced shapes
     pub(crate) need_redraw: bool,
     event_sender: Option<Sender<WidgetEvent>>,
     pub(crate) mouse_handler: MouseHandler<T>,
     pub(crate) real_size: Option<SurfaceBox>,
-    pub(crate) childs_surfaces: Vec<Surface<T>>,
+    pub(crate) childs_surfaces: Vec<Surface<T, U>>,
 }
 
 #[derive(Clone, Copy)]
@@ -34,15 +34,18 @@ impl SurfaceBox {
     }
 }
 
-impl<T: Default> Surface<T> {
-    pub fn new(size: WidgetSize, position: WidgetPosition, render: fn(&mut [u8], u32, u32, SurfaceBox, &mut T)) -> Self {
+impl<T: Default, U: DrawAreaType> Surface<T, U> {
+    pub fn new<F>(size: WidgetSize, position: WidgetPosition, render: F) -> Self
+    where
+        F: for<'a> FnMut(&mut U::Type<'a>, u32, u32, SurfaceBox, &mut T) + 'static + Send
+    {
         let id = NEXT_SURFACE_ID.fetch_add(1, Ordering::Relaxed);
 
         Surface {
             id,
             size,
             position,
-            render,
+            render: Box::new(render),
             need_redraw: true,
             event_sender: None,
             mouse_handler: MouseHandler::default(),
@@ -93,13 +96,16 @@ impl<T: Default> Surface<T> {
         self.ask_redraw();
     }
 
-    pub fn edit_render(&mut self, new_render: fn(&mut [u8], u32, u32, SurfaceBox, &mut T)) {
-        self.render = new_render;
+    pub fn edit_render<F>(&mut self, new_render: F)
+    where
+        F: for<'a> FnMut(&mut U::Type<'a>, u32, u32, SurfaceBox, &mut T) + 'static + Send
+    {
+        self.render = Box::new(new_render);
 
         self.ask_redraw();
     }
 
-    pub fn to_front_of(&mut self, other_surface: &mut Surface<T>) {
+    pub fn to_front_of(&mut self, other_surface: &mut Surface<T, U>) {
         if self.id < other_surface.id {
             let temp_id = self.id;
             self.id = other_surface.id;
@@ -142,7 +148,7 @@ impl<T: Default> Surface<T> {
         self.event_sender = Some(event_sender);
     }
 
-    pub fn add_surface(&mut self, mut surface: Surface<T>) {
+    pub fn add_surface(&mut self, mut surface: Surface<T, U>) {
         if let Some(surface_box) = self.real_size {
             let (xs, ys, xe, ye) = (surface_box.min_x, surface_box.min_y, surface_box.max_x, surface_box.max_y);
             surface.update_size(xe-xs, ye-ys, xs, ys);

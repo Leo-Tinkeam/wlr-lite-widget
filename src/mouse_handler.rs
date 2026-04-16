@@ -2,7 +2,7 @@ use smithay_client_toolkit::{
     reexports::protocols::wp::cursor_shape::v1::client::wp_cursor_shape_device_v1::Shape, seat::pointer::{AxisScroll, PointerEvent, PointerEventKind, PointerHandler}, shell::WaylandSurface
 };
 use wayland_client::{Connection, QueueHandle, protocol::wl_pointer};
-use crate::{Surface, Widget, WidgetState, widget::SharedWidget};
+use crate::{Surface, Widget, WidgetState, widget::SharedWidget, widget_builder::DrawAreaType};
 
 #[derive(PartialEq, Clone)]
 pub enum MouseButton {
@@ -28,10 +28,10 @@ pub struct MouseResponse {
     pub need_redraw: bool,
 }
 
-fn call_mouse_action<T, F, D>(on_action_option: Option<F>, on_action_default: D, app_state: &mut T, surfaces: &mut Vec<Surface<T>>) -> bool
+fn call_mouse_action<T, U: DrawAreaType, F, D>(on_action_option: Option<F>, on_action_default: D, app_state: &mut T, surfaces: &mut Vec<Surface<T, U>>) -> bool
 where 
     F: FnOnce(&mut T) -> MouseResponse,
-    D: FnOnce(&mut T, &mut Vec<Surface<T>>),
+    D: FnOnce(&mut T, &mut Vec<Surface<T, U>>),
 {
     let mut need_redraw = false;
     let mut do_default = true;
@@ -48,10 +48,10 @@ where
     need_redraw
 }
 
-pub fn default_mouse_action<T: Default, F, D>(on_action_option: Option<F>, on_action_default: D, app_state: &mut T, surface: &mut Surface<T>, position: (f64, f64))
+pub fn default_mouse_action<T: Default, U: DrawAreaType, F, D>(on_action_option: Option<F>, on_action_default: D, app_state: &mut T, surface: &mut Surface<T, U>, position: (f64, f64))
 where 
     F: FnOnce(&mut T) -> MouseResponse,
-    D: FnOnce(&mut T, &mut Vec<Surface<T>>),
+    D: FnOnce(&mut T, &mut Vec<Surface<T, U>>),
 {
     if let Some(surface_box) = &surface.real_size {
         let (x, y) = position;
@@ -70,7 +70,7 @@ where
     }
 }
 
-pub fn default_on_enter<T: Default>(app_state: &mut T, surfaces: &mut Vec<Surface<T>>, position: (f64, f64)) {
+pub fn default_on_enter<T: Default, U: DrawAreaType>(app_state: &mut T, surfaces: &mut Vec<Surface<T, U>>, position: (f64, f64)) {
     for surface in surfaces {
         default_mouse_action(
             surface.mouse_handler.on_enter.map(|on_enter| move |app_state: &mut T| { on_enter(app_state) }),
@@ -82,7 +82,7 @@ pub fn default_on_enter<T: Default>(app_state: &mut T, surfaces: &mut Vec<Surfac
     }
 }
 
-pub fn default_on_leave<T: Default>(app_state: &mut T, surfaces: &mut Vec<Surface<T>>, position: (f64, f64)) {
+pub fn default_on_leave<T: Default, U: DrawAreaType>(app_state: &mut T, surfaces: &mut Vec<Surface<T, U>>, position: (f64, f64)) {
     for surface in surfaces {
         default_mouse_action(
             surface.mouse_handler.on_leave.map(|on_leave| move |app_state: &mut T| { on_leave(app_state) }),
@@ -94,7 +94,7 @@ pub fn default_on_leave<T: Default>(app_state: &mut T, surfaces: &mut Vec<Surfac
     }
 }
 
-pub fn default_on_motion<T: Default>(app_state: &mut T, surfaces: &mut Vec<Surface<T>>, position: (f64, f64)) {
+pub fn default_on_motion<T: Default, U: DrawAreaType>(app_state: &mut T, surfaces: &mut Vec<Surface<T, U>>, position: (f64, f64)) {
     for surface in surfaces {
         default_mouse_action(
             surface.mouse_handler.on_motion.map(|on_motion| move |app_state: &mut T| { on_motion(app_state, position) }),
@@ -106,7 +106,7 @@ pub fn default_on_motion<T: Default>(app_state: &mut T, surfaces: &mut Vec<Surfa
     }
 }
 
-pub fn default_on_press<T: Default>(app_state: &mut T, surfaces: &mut Vec<Surface<T>>, button: &MouseButton, position: (f64, f64)) {
+pub fn default_on_press<T: Default, U: DrawAreaType>(app_state: &mut T, surfaces: &mut Vec<Surface<T, U>>, button: &MouseButton, position: (f64, f64)) {
     for surface in surfaces {
         default_mouse_action(
             surface.mouse_handler.on_press.map(|on_press| move |app_state: &mut T| { on_press(app_state, button) }),
@@ -118,7 +118,7 @@ pub fn default_on_press<T: Default>(app_state: &mut T, surfaces: &mut Vec<Surfac
     }
 }
 
-pub fn default_on_release<T: Default>(app_state: &mut T, surfaces: &mut Vec<Surface<T>>, button: &MouseButton, position: (f64, f64)) {
+pub fn default_on_release<T: Default, U: DrawAreaType>(app_state: &mut T, surfaces: &mut Vec<Surface<T, U>>, button: &MouseButton, position: (f64, f64)) {
     for surface in surfaces {
         default_mouse_action(
             surface.mouse_handler.on_release.map(|on_release| move |app_state: &mut T| { on_release(app_state, button) }),
@@ -130,7 +130,7 @@ pub fn default_on_release<T: Default>(app_state: &mut T, surfaces: &mut Vec<Surf
     }
 }
 
-pub fn default_on_scroll<T: Default>(app_state: &mut T, surfaces: &mut Vec<Surface<T>>, horizontal: AxisScroll, vertical: AxisScroll, position: (f64, f64)) {
+pub fn default_on_scroll<T: Default, U: DrawAreaType>(app_state: &mut T, surfaces: &mut Vec<Surface<T, U>>, horizontal: AxisScroll, vertical: AxisScroll, position: (f64, f64)) {
     for surface in surfaces {
         default_mouse_action(
             surface.mouse_handler.on_scroll.map(|on_scroll| move |app_state: &mut T| { on_scroll(app_state, horizontal, vertical) }),
@@ -142,7 +142,7 @@ pub fn default_on_scroll<T: Default>(app_state: &mut T, surfaces: &mut Vec<Surfa
     }
 }
 
-impl<T> Widget<T> {
+impl<T, U: DrawAreaType> Widget<T, U> {
     pub fn on_press(self, func: fn(&mut T, button: &MouseButton) -> MouseResponse) -> Self {
         {
             let mut shared_widget = self.shared_widget.0.lock().unwrap();
@@ -171,7 +171,7 @@ fn parse_mouse_button(code: u32) -> Option<MouseButton> {
     }
 }
 
-impl<T: 'static + Default + Send> PointerHandler for WidgetState<T> {
+impl<T: 'static + Default + Send, U: 'static + DrawAreaType> PointerHandler for WidgetState<T, U> {
     fn pointer_frame(
         &mut self,
         _conn: &Connection,

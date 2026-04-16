@@ -12,35 +12,73 @@ use wayland_client::{
 };
 use crate::{WidgetSize, WidgetPosition, Widget, WidgetState, WidgetAnchor, Margin, SizeUnit, SharedWidget, WidgetEvent, MouseHandler};
 
-pub struct WidgetBuilder {
+pub trait DrawAreaType {
+    type Type<'a>;
+}
+
+#[derive(Clone)]
+pub struct WithCanvasRender;
+
+pub struct CanvasType<'a> {
+    pub canvas: &'a mut [u8],
+}
+
+impl DrawAreaType for WithCanvasRender {
+    type Type<'a> = CanvasType<'a>;
+}
+
+fn default_get_draw_area<'a>(canvas: &'a mut [u8], _width: u32, _height: u32) -> CanvasType<'a> {
+    CanvasType {
+        canvas
+    }
+}
+
+pub struct WidgetBuilder<U: DrawAreaType> {
     size: WidgetSize,
     position: WidgetPosition,
     name: String,
     layer: Layer,
+    get_draw_area: for<'a> fn(&'a mut [u8], u32, u32) -> U::Type<'a>,
 }
 
-impl WidgetBuilder {
-    pub fn new(size: WidgetSize, position: WidgetPosition, name: String) -> Self {
-        WidgetBuilder {
+impl WidgetBuilder<WithCanvasRender> {
+    pub fn new(size: WidgetSize, position: WidgetPosition, name: String) -> WidgetBuilder<WithCanvasRender> {
+        WidgetBuilder::<WithCanvasRender> {
             size,
             position,
             name,
             layer: Layer::Background,
+            get_draw_area: default_get_draw_area,
         }
     }
+}
 
+impl<U: 'static + DrawAreaType> WidgetBuilder<U> {
     pub fn at_layer(mut self, layer: Layer) -> Self {
         self.layer = layer;
         self
     }
 
-    pub fn build<T: 'static + Default + Send>(self) -> Widget<T> {
+    pub fn with_get_draw_area<V: 'static + DrawAreaType>(self, function: for<'a> fn(&'a mut [u8], u32, u32) -> V::Type<'a>) -> WidgetBuilder<V> {
+        WidgetBuilder {
+            size: self.size,
+            position: self.position,
+            name: self.name,
+            layer: self.layer,
+            get_draw_area: function,
+        }
+    }
+
+    // If we help user to render with tiny-skia or cairo, we can define with_skia() and with_cairo defined when feature is enabled and that requires that only one of the three with_ is used
+    // And there should be an enum that define which of the three is used to know which render to call (custom one or intern one)
+
+    pub fn build<T: 'static + Default + Send>(self) -> Widget<T, U> {
         // Connecting to the compositor (server)
         let conn = Connection::connect_to_env().unwrap();
 
         // Enumerate the list of globals to get the protocols the server implements.
         let (globals, mut event_queue) = registry_queue_init(&conn).unwrap();
-        let qh: QueueHandle<WidgetState<T>> = event_queue.handle();
+        let qh: QueueHandle<WidgetState<T, U>> = event_queue.handle();
 
         // The compositor (not to be confused with the server which is commonly called the compositor) allows
         // configuring surfaces to be presented.
@@ -106,6 +144,7 @@ impl WidgetBuilder {
             layer: None,
             cursor_shape_manager,
             pointer: None,
+            get_draw_area: self.get_draw_area,
 
             widget_size: self.size,
             widget_name: self.name,

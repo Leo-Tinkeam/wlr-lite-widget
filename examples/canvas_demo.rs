@@ -1,4 +1,4 @@
-use wlr_lite_widget::{MouseButton, MouseResponse, SizeUnit, Surface, SurfaceBox, WidgetBuilder, WidgetPosition, WidgetSize, no_render};
+use wlr_lite_widget::{CanvasType, MouseButton, MouseResponse, SizeUnit, Surface, SurfaceBox, WidgetBuilder, WidgetPosition, WidgetSize, WithCanvasRender, no_render};
 use tiny_skia::{PixmapMut, Color, Paint, Rect, Transform};
 use std::thread;
 use std::time::Duration;
@@ -38,7 +38,7 @@ fn main() {
     let mut surface2 = Surface::new(
         half_size.clone(),
         position_1.clone(),
-        no_render
+        no_render::<MyStruct, WithCanvasRender>
     );
 
     let surface3 = Surface::new(
@@ -94,10 +94,9 @@ fn main() {
     println!("--- Fin de l'exemple ---");
 }
 
-fn render(canvas: &mut [u8], widget_width: u32, widget_height: u32, surface_box: SurfaceBox, app_state: &mut MyStruct) {
-    // 1. Création de la Pixmap "wrapper"
+fn render(canvas_struct: &mut CanvasType, widget_width: u32, widget_height: u32, surface_box: SurfaceBox, app_state: &mut MyStruct) {
     let mut pixmap = PixmapMut::from_bytes(
-        canvas, 
+        canvas_struct.canvas, 
         widget_width,
         widget_height,
     ).expect("Erreur taille buffer / stride");
@@ -116,7 +115,7 @@ fn render(canvas: &mut [u8], widget_width: u32, widget_height: u32, surface_box:
     // paint.anti_alias = true; // Pas utile pour un rectangle droit, mais utile pour des cercles ou formes avancées
 
     println!("Drawing 1!");
-    // 3. Dessin du rectangle
+    // Dessin du rectangle
     if let Some(rect) = Rect::from_xywh(x, y, w, h) {
         // Transform::identity() veut dire "pas de rotation/zoom"
         // None est pour le clipping mask (masque d'écrêtage)
@@ -124,10 +123,9 @@ fn render(canvas: &mut [u8], widget_width: u32, widget_height: u32, surface_box:
     }
 }
 
-fn render2(canvas: &mut [u8], widget_width: u32, widget_height: u32, surface_box: SurfaceBox, app_state: &mut MyStruct) {
-    // 1. Création de la Pixmap "wrapper"
+fn render2(canvas_struct: &mut CanvasType, widget_width: u32, widget_height: u32, surface_box: SurfaceBox, app_state: &mut MyStruct) {
     let mut pixmap = PixmapMut::from_bytes(
-        canvas, 
+        canvas_struct.canvas, 
         widget_width,
         widget_height,
     ).expect("Erreur taille buffer / stride");
@@ -146,7 +144,7 @@ fn render2(canvas: &mut [u8], widget_width: u32, widget_height: u32, surface_box
     // paint.anti_alias = true; // Pas utile pour un rectangle droit, mais utile pour des cercles ou formes avancées
 
     println!("Drawing 2!");
-    // 3. Dessin du rectangle
+    // Dessin du rectangle
     if let Some(rect) = Rect::from_xywh(x, y, w, h) {
         // Transform::identity() veut dire "pas de rotation/zoom"
         // None est pour le clipping mask (masque d'écrêtage)
@@ -154,10 +152,9 @@ fn render2(canvas: &mut [u8], widget_width: u32, widget_height: u32, surface_box
     }
 }
 
-fn render3(canvas: &mut [u8], widget_width: u32, widget_height: u32, surface_box: SurfaceBox, app_state: &mut MyStruct) {
-    // 1. Création de la Pixmap "wrapper"
+fn render3(canvas_struct: &mut CanvasType, widget_width: u32, widget_height: u32, surface_box: SurfaceBox, app_state: &mut MyStruct) {
     let mut pixmap = PixmapMut::from_bytes(
-        canvas, 
+        canvas_struct.canvas, 
         widget_width,
         widget_height,
     ).expect("Erreur taille buffer / stride");
@@ -176,7 +173,7 @@ fn render3(canvas: &mut [u8], widget_width: u32, widget_height: u32, surface_box
     // paint.anti_alias = true; // Pas utile pour un rectangle droit, mais utile pour des cercles ou formes avancées
 
     println!("Drawing 2!");
-    // 3. Dessin du rectangle
+    // Dessin du rectangle
     if let Some(rect) = Rect::from_xywh(x, y, w, h) {
         // Transform::identity() veut dire "pas de rotation/zoom"
         // None est pour le clipping mask (masque d'écrêtage)
