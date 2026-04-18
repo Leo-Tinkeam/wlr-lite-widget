@@ -6,17 +6,16 @@ use smithay_client_toolkit::{
     shell::{wlr_layer::{Layer, LayerShell}},
     shm::Shm,
 };
-use std::{sync::{Arc, Condvar, Mutex, mpsc::{Receiver, Sender, channel}}, thread};
+use std::{marker::PhantomData, sync::{Arc, Condvar, Mutex, mpsc::{Receiver, Sender, channel}}, thread};
 use wayland_client::{
     Connection, QueueHandle, globals::registry_queue_init,
 };
-use crate::{WidgetSize, WidgetPosition, Widget, WidgetState, WidgetAnchor, Margin, SizeUnit, SharedWidget, WidgetEvent, MouseHandler};
+use crate::{Margin, MouseHandler, SharedWidget, SizeUnit, Widget, WidgetAnchor, WidgetEvent, WidgetPosition, WidgetSize, WidgetState, surface::SurfaceTrait};
 
 pub trait DrawAreaType {
     type Type<'a>;
 }
 
-#[derive(Clone)]
 pub struct WithCanvasRender;
 
 pub struct CanvasType<'a> {
@@ -53,7 +52,7 @@ impl WidgetBuilder<WithCanvasRender> {
     }
 }
 
-impl<U: 'static + DrawAreaType> WidgetBuilder<U> {
+impl<U: 'static + DrawAreaType + Send> WidgetBuilder<U> {
     pub fn at_layer(mut self, layer: Layer) -> Self {
         self.layer = layer;
         self
@@ -72,13 +71,13 @@ impl<U: 'static + DrawAreaType> WidgetBuilder<U> {
     // If we help user to render with tiny-skia or cairo, we can define with_skia() and with_cairo defined when feature is enabled and that requires that only one of the three with_ is used
     // And there should be an enum that define which of the three is used to know which render to call (custom one or intern one)
 
-    pub fn build<T: 'static + Default + Send>(self) -> Widget<T, U> {
+    pub fn build<T: 'static + Default + Send, V: 'static + SurfaceTrait<T, U> + Send>(self) -> Widget<T, U, V> {
         // Connecting to the compositor (server)
         let conn = Connection::connect_to_env().unwrap();
 
         // Enumerate the list of globals to get the protocols the server implements.
         let (globals, mut event_queue) = registry_queue_init(&conn).unwrap();
-        let qh: QueueHandle<WidgetState<T, U>> = event_queue.handle();
+        let qh: QueueHandle<WidgetState<T, U, V>> = event_queue.handle();
 
         // The compositor (not to be confused with the server which is commonly called the compositor) allows
         // configuring surfaces to be presented.
@@ -124,6 +123,7 @@ impl<U: 'static + DrawAreaType> WidgetBuilder<U> {
                 mouse_handler: MouseHandler::default(),
                 width: None,
                 height: None,
+                _marker: PhantomData,
             }),
             Condvar::new(),
         ));

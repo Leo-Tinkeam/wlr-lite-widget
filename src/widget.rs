@@ -16,19 +16,26 @@ use smithay_client_toolkit::{
     },
     shm::{Shm, ShmHandler, slot::SlotPool},
 };
-use std::sync::{Arc, Condvar, Mutex, mpsc::Sender};
+use std::{marker::PhantomData, sync::{Arc, Condvar, Mutex, mpsc::Sender}};
 use wayland_client::{
     Connection, Dispatch, QueueHandle, protocol::{wl_callback, wl_output, wl_pointer, wl_seat, wl_shm, wl_surface}
 };
-use crate::{Margin, MouseHandler, Surface, WidgetSize, widget_builder::DrawAreaType};
+use crate::{Margin, MouseHandler, WidgetSize, surface::SurfaceTrait, widget_builder::DrawAreaType};
 
-#[derive(Clone)]
-pub struct Widget<T, U: DrawAreaType> {
-    pub(crate) shared_widget: Arc<(Mutex<SharedWidget<T, U>>, Condvar)>,
+pub struct Widget<T, U: DrawAreaType, V> {
+    pub(crate) shared_widget: Arc<(Mutex<SharedWidget<T, U, V>>, Condvar)>,
 }
 
-impl<T: 'static + Default + Send, U: DrawAreaType> Widget<T, U> {
-    pub fn add_surface(&mut self, mut surface: Surface<T, U>) {
+impl<T, U: DrawAreaType, V> Clone for Widget<T, U, V> {
+    fn clone(&self) -> Self {
+        Self {
+            shared_widget: Arc::clone(&self.shared_widget),
+        }
+    }
+}
+
+impl<T: 'static + Default + Send, U: DrawAreaType, V: SurfaceTrait<T, U>> Widget<T, U, V> {
+    pub fn add_surface(&mut self, mut surface: V) {
         let mut shared_widget = self.shared_widget.0.lock().unwrap();
         if let (Some(width), Some(height)) = (shared_widget.width, shared_widget.height) {
             surface.update_size(width, height, 0, 0);
@@ -70,10 +77,10 @@ impl<T: 'static + Default + Send, U: DrawAreaType> Widget<T, U> {
     }
 }
 
-pub(crate) struct SharedWidget<T, U: DrawAreaType> {
+pub(crate) struct SharedWidget<T, U: DrawAreaType, V> {
     pub(crate) exit: bool, 
     pub(crate) app_state: T,
-    pub(crate) surfaces: Vec<Surface<T, U>>,
+    pub(crate) surfaces: Vec<V>,
     pub(crate) event_sender: Sender<WidgetEvent>,
     pub(crate) frame_asked: bool,
     pub(crate) force_redraw: bool,
@@ -83,10 +90,11 @@ pub(crate) struct SharedWidget<T, U: DrawAreaType> {
     pub(crate) mouse_handler: MouseHandler<T>,
     pub(crate) width: Option<u32>,
     pub(crate) height: Option<u32>,
+    pub(crate)_marker: PhantomData<U>,
 }
 
-impl<T: 'static + Default + Send, U: 'static + DrawAreaType> SharedWidget<T, U> {
-    pub(crate) fn ask_redraw(&mut self, qh: &QueueHandle<WidgetState<T, U>>) {
+impl<T: 'static + Default + Send, U: 'static + DrawAreaType, V: 'static + SurfaceTrait<T, U>> SharedWidget<T, U, V> {
+    pub(crate) fn ask_redraw(&mut self, qh: &QueueHandle<WidgetState<T, U, V>>) {
         if !self.frame_asked {
             if let Some(surface) = self.wl_surface.as_mut() {
                 surface.frame(qh, FrameRequest::Redraw);
@@ -98,12 +106,12 @@ impl<T: 'static + Default + Send, U: 'static + DrawAreaType> SharedWidget<T, U> 
     }
 }
 
-pub(crate) enum WidgetEvent {
+pub enum WidgetEvent {
     Redraw,
     Exit,
 }
 
-pub(crate) struct WidgetState<T, U: DrawAreaType> {
+pub(crate) struct WidgetState<T, U: DrawAreaType, V> {
     pub(crate) registry_state: RegistryState,
     pub(crate) seat_state: SeatState,
     pub(crate) output_state: OutputState,
@@ -124,10 +132,10 @@ pub(crate) struct WidgetState<T, U: DrawAreaType> {
     pub(crate) widget_anchor: Option<Anchor>,
     pub(crate) margin: Margin,
 
-    pub(crate) shared_widget: Arc<(Mutex<SharedWidget<T, U>>, Condvar)>,
+    pub(crate) shared_widget: Arc<(Mutex<SharedWidget<T, U, V>>, Condvar)>,
 }
 
-impl<T: 'static + Default + Send, U: DrawAreaType> WidgetState<T, U> {
+impl<T: 'static + Default + Send, U: DrawAreaType, V: SurfaceTrait<T, U>> WidgetState<T, U, V> {
     pub fn draw(&mut self) {
         let layer = match self.layer.clone() {
             None => return,
@@ -156,7 +164,7 @@ impl<T: 'static + Default + Send, U: DrawAreaType> WidgetState<T, U> {
                 force_redraw,
                 ..
             } = &mut *shared_widget;
-            draw_surfaces::<T, U>(surfaces, app_state, width, height, &layer, &mut draw_area, width, height, *force_redraw);
+            draw_surfaces::<T, U, V>(surfaces, app_state, width, height, &layer, &mut draw_area, width, height, *force_redraw);
             shared_widget.force_redraw = false;
 
             // Attach and commit to present.
@@ -175,26 +183,15 @@ impl<T: 'static + Default + Send, U: DrawAreaType> WidgetState<T, U> {
     }
 }
 
-fn draw_surfaces<T, U: DrawAreaType>(surfaces: &mut Vec<Surface<T, U>>, app_state: &mut T, parent_width: u32, parent_height: u32, layer: &LayerSurface, draw_area: &mut U::Type<'_>, total_width: u32, total_height: u32, force_redraw: bool) {
-    surfaces.sort_by_key(|s| s.id); // TODO: only call this when to_front_of is call on a Surface ?
+fn draw_surfaces<T, U: DrawAreaType, V: SurfaceTrait<T, U>>(surfaces: &mut Vec<V>, app_state: &mut T, parent_width: u32, parent_height: u32, layer: &LayerSurface, draw_area: &mut U::Type<'_>, total_width: u32, total_height: u32, force_redraw: bool) {
+    surfaces.sort_by_key(|s| s.get_surface_data().id); // TODO: only call this when to_front_of is call on a Surface ?
     for surface in surfaces {
         // TODO: should redraw surfaces without need_redraw if they are above a redrawed surfaces (since they are sorted before the for loop, this should be easy)
-        let (surface_width, surface_height) = surface.size.get_dimension(parent_width, parent_height);
-        let mut force_child_redraw = false;
-        if surface.need_redraw || force_redraw {
-            force_child_redraw = true;
-            if let Some(real_size) = surface.real_size {
-                surface.need_redraw = false;
-                (surface.render)(draw_area, total_width, total_height, real_size, app_state);
-                layer.wl_surface().damage_buffer(real_size.min_x as i32, real_size.min_y as i32, surface_width as i32, surface_height as i32); // TODO: maybe surface.render should return the area to damage (to accept damaging more than his area for shadow or restrict to a smaller area)
-            }
-        }
-
-        draw_surfaces(&mut surface.childs_surfaces, app_state, surface_width, surface_height, layer, draw_area, total_width, total_height, force_child_redraw);
+        surface.draw(app_state, parent_width, parent_height, layer, draw_area, total_width, total_height, force_redraw, draw_surfaces);
     }
 }
 
-impl<T: 'static + Default + Send, U: DrawAreaType> CompositorHandler for WidgetState<T, U> {
+impl<T: 'static + Default + Send, U: DrawAreaType, V: SurfaceTrait<T, U>> CompositorHandler for WidgetState<T, U, V> {
     fn scale_factor_changed(
         &mut self,
         _conn: &Connection,
@@ -242,7 +239,7 @@ impl<T: 'static + Default + Send, U: DrawAreaType> CompositorHandler for WidgetS
     ) {}
 }
 
-impl<T: 'static + Default + Send, U: 'static + DrawAreaType> OutputHandler for WidgetState<T, U> {
+impl<T: 'static + Default + Send, U: 'static + DrawAreaType, V: 'static + SurfaceTrait<T, U>> OutputHandler for WidgetState<T, U, V> {
     fn output_state(&mut self) -> &mut OutputState {
         &mut self.output_state
     }
@@ -328,7 +325,7 @@ impl<T: 'static + Default + Send, U: 'static + DrawAreaType> OutputHandler for W
     }
 }
 
-impl<T: 'static + Default + Send, U: DrawAreaType> LayerShellHandler for WidgetState<T, U> {
+impl<T: 'static + Default + Send, U: DrawAreaType, V: SurfaceTrait<T, U>> LayerShellHandler for WidgetState<T, U, V> {
     fn closed(&mut self, _conn: &Connection, _qh: &QueueHandle<Self>, _layer: &LayerSurface) {
         let mut shared_widget = self.shared_widget.0.lock().unwrap();
         if shared_widget.event_sender.send(WidgetEvent::Exit).is_err() {
@@ -352,7 +349,7 @@ impl<T: 'static + Default + Send, U: DrawAreaType> LayerShellHandler for WidgetS
     }
 }
 
-impl<T: 'static + Default + Send, U: 'static + DrawAreaType> SeatHandler for WidgetState<T, U> {
+impl<T: 'static + Default + Send, U: 'static + DrawAreaType, V: 'static + SurfaceTrait<T, U>> SeatHandler for WidgetState<T, U, V> {
     fn seat_state(&mut self) -> &mut SeatState {
         &mut self.seat_state
     }
@@ -395,7 +392,7 @@ enum FrameRequest {
     Redraw,
 }
 
-impl<T: 'static + Default + Send, U: DrawAreaType> Dispatch<wl_callback::WlCallback, FrameRequest> for WidgetState<T, U> {
+impl<T: 'static + Default + Send, U: DrawAreaType, V: SurfaceTrait<T, U>> Dispatch<wl_callback::WlCallback, FrameRequest> for WidgetState<T, U, V> {
     fn event(
         widget_state: &mut Self,
         _cb: &wl_callback::WlCallback,
@@ -419,23 +416,35 @@ impl<T: 'static + Default + Send, U: DrawAreaType> Dispatch<wl_callback::WlCallb
     }
 }
 
-impl<T, U: DrawAreaType> ShmHandler for WidgetState<T, U> {
+impl<T, U: DrawAreaType, V> ShmHandler for WidgetState<T, U, V> {
     fn shm_state(&mut self) -> &mut Shm {
         &mut self.shm
     }
 }
 
-impl<T: 'static + Default + Send, U: 'static + DrawAreaType> ProvidesRegistryState for WidgetState<T, U> {
+impl<T: 'static + Default + Send, U: 'static + DrawAreaType, V: 'static + SurfaceTrait<T, U>> ProvidesRegistryState for WidgetState<T, U, V> {
     fn registry(&mut self) -> &mut RegistryState {
         &mut self.registry_state
     }
     registry_handlers![OutputState, SeatState];
 }
 
-delegate_compositor!(@<T: 'static + Default + Send, U: 'static + DrawAreaType> WidgetState<T, U>);
-delegate_output!(@<T: 'static + Default + Send, U: 'static + DrawAreaType> WidgetState<T, U>);
-delegate_shm!(@<T, U: DrawAreaType> WidgetState<T, U>);
-delegate_seat!(@<T: 'static + Default + Send, U: 'static + DrawAreaType> WidgetState<T, U>);
-delegate_pointer!(@<T: 'static + Default + Send, U: 'static + DrawAreaType> WidgetState<T, U>);
-delegate_layer!(@<T: 'static + Default + Send, U: 'static + DrawAreaType> WidgetState<T, U>);
-delegate_registry!(@<T: 'static + Default + Send, U: 'static + DrawAreaType> WidgetState<T, U>);
+delegate_compositor!(@<T, U, V> WidgetState<T, U, V> where T: 'static + Default + Send, U: 'static + DrawAreaType, V: 'static + SurfaceTrait<T, U>);
+delegate_output!(@<T, U, V> WidgetState<T, U, V> where T: 'static + Default + Send, U: 'static + DrawAreaType, V: 'static + SurfaceTrait<T, U>);
+delegate_shm!(@<T, U: DrawAreaType, V> WidgetState<T, U, V>);
+delegate_seat!(@<T, U, V> WidgetState<T, U, V> where T: 'static + Default + Send, U: 'static + DrawAreaType, V: 'static + SurfaceTrait<T, U>);
+delegate_pointer!(@<T, U, V> WidgetState<T, U, V> where T: 'static + Default + Send, U: 'static + DrawAreaType, V: 'static + SurfaceTrait<T, U>);
+delegate_layer!(@<T, U, V> WidgetState<T, U, V> where T: 'static + Default + Send, U: 'static + DrawAreaType, V: 'static + SurfaceTrait<T, U>);
+delegate_registry!(@<T, U, V> WidgetState<T, U, V> where T: 'static + Default + Send, U: 'static + DrawAreaType, V: 'static + SurfaceTrait<T, U>);
+
+/* For this to work, I edited my local version of delegate_compositor macro of SCTK to add this (same for others with small edit for each one, juste the name):
+At smithay-client-toolkit-version/src/compositor.rs
+
+Added : $( where $($bounds: tt)+ )? at the end of the branch (after "ty")
+Added : $( where $($bounds)+ )?  on delegate_dispatch calls (or calls to itself)
+
+And also the delegate_dispatch macro from wayland-client, see my fork (PR is waiting for review) : https://github.com/Smithay/wayland-rs/pull/898
+
+I'm waiting for wayland-client to be released with my update (I hope) to do a PR on SCTK (and delete this comment block)
+
+*/

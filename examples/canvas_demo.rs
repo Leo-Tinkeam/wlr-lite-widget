@@ -1,4 +1,4 @@
-use wlr_lite_widget::{CanvasType, MouseButton, MouseResponse, SizeUnit, Surface, SurfaceBox, WidgetBuilder, WidgetPosition, WidgetSize, WithCanvasRender, no_render};
+use wlr_lite_widget::{CanvasType, MouseButton, MouseResponse, SizeUnit, Surface, SurfaceBox, SurfaceTrait, WidgetBuilder, WidgetPosition, WidgetSize, WithCanvasRender, no_render};
 use tiny_skia::{PixmapMut, Color, Paint, Rect, Transform};
 use std::thread;
 use std::time::Duration;

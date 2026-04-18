@@ -1,4 +1,4 @@
-use wlr_lite_widget::{DrawAreaType, MouseButton, MouseResponse, SizeUnit, Surface, SurfaceBox, WidgetBuilder, WidgetPosition, WidgetSize, no_render};
+use wlr_lite_widget::{DrawAreaType, MouseButton, MouseResponse, SizeUnit, Surface, SurfaceBox, SurfaceTrait, WidgetBuilder, WidgetPosition, WidgetSize, no_render};
 use tiny_skia::{PixmapMut, Color, Paint, Rect, Transform};
 use std::thread;
 use std::time::Duration;
@@ -8,7 +8,6 @@ pub struct MyStruct {
     clicked: bool,
 }
 
-#[derive(Clone)]
 pub struct WithMyFunction;
 
 impl DrawAreaType for WithMyFunction {
