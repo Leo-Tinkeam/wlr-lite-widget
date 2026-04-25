@@ -10,7 +10,7 @@ use std::{marker::PhantomData, sync::{Arc, Condvar, Mutex, mpsc::{Receiver, Send
 use wayland_client::{
     Connection, QueueHandle, globals::registry_queue_init,
 };
-use crate::{Margin, MouseHandler, SharedWidget, SizeUnit, Widget, WidgetAnchor, WidgetEvent, WidgetPosition, WidgetSize, WidgetState, surface::SurfaceTrait};
+use crate::{Margin, MouseHandler, SharedWidget, SizeUnit, Widget, WidgetAnchor, WidgetEvent, WidgetPosition, WidgetSize, WidgetState, SurfaceTrait};
 
 pub trait DrawAreaType {
     type Type<'a>;

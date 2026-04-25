@@ -2,7 +2,7 @@ use smithay_client_toolkit::{
     reexports::protocols::wp::cursor_shape::v1::client::wp_cursor_shape_device_v1::Shape, seat::pointer::{AxisScroll, PointerEvent, PointerEventKind, PointerHandler}, shell::WaylandSurface
 };
 use wayland_client::{Connection, QueueHandle, protocol::wl_pointer};
-use crate::{Widget, WidgetState, surface::SurfaceTrait, widget::SharedWidget, widget_builder::DrawAreaType};
+use crate::{Widget, WidgetState, SurfaceTrait, widget::SharedWidget, widget_builder::DrawAreaType};
 
 #[derive(PartialEq, Clone)]
 pub enum MouseButton {

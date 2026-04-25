@@ -20,7 +20,7 @@ use std::{marker::PhantomData, sync::{Arc, Condvar, Mutex, mpsc::Sender}};
 use wayland_client::{
     Connection, Dispatch, QueueHandle, protocol::{wl_callback, wl_output, wl_pointer, wl_seat, wl_shm, wl_surface}
 };
-use crate::{Margin, MouseHandler, WidgetSize, surface::SurfaceTrait, widget_builder::DrawAreaType};
+use crate::{Margin, MouseHandler, WidgetSize, SurfaceTrait, widget_builder::DrawAreaType};
 
 pub struct Widget<T, U: DrawAreaType, V> {
     pub(crate) shared_widget: Arc<(Mutex<SharedWidget<T, U, V>>, Condvar)>,
