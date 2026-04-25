@@ -6,21 +6,21 @@ pub struct WithSkia;
 
 impl DrawAreaType for WithSkia {
     type Type<'a> = SkiaDrawArea<'a>;
+
+    fn get_draw_area<'a>(canvas: &'a mut [u8], width: u32, height: u32) -> Self::Type<'a> {
+        SkiaDrawArea {
+            pixmap: PixmapMut::from_bytes(
+                canvas, 
+                width,
+                height,
+            ).expect("Erreur taille buffer / stride")
+        }
+    }
 }
 
 pub struct SkiaSurface<T> {
     pub(crate) render: Box<dyn for<'a> FnMut(&mut SkiaDrawArea, u32, u32, SurfaceBox, &mut T) + Send>,
     surface_data: SurfaceData<T, WithSkia, Self>,
-}
-
-pub(crate) fn get_skia_draw_area<'a>(canvas: &'a mut [u8], width: u32, height: u32) -> SkiaDrawArea<'a> {
-    SkiaDrawArea {
-        pixmap: PixmapMut::from_bytes(
-            canvas, 
-            width,
-            height,
-        ).expect("Erreur taille buffer / stride")
-    }
 }
 
 impl<T> SurfaceTrait<T, WithSkia> for SkiaSurface<T> {

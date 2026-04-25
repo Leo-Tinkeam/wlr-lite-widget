@@ -70,6 +70,7 @@ fn main() {
     let widget_position = WidgetPosition::Coordinates(SizeUnit::Percent(10f32), SizeUnit::Percent(10f32));
 
     let mut widget = WidgetBuilder::new(widget_size, widget_position, "MyWidget".to_string())
+        .with_standard_canvas()
         .build();
 
     widget.add_surface(surface);

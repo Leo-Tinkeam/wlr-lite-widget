@@ -124,7 +124,6 @@ pub(crate) struct WidgetState<T, U: DrawAreaType, V> {
     pub(crate) layer: Option<LayerSurface>,
     pub(crate) cursor_shape_manager: CursorShapeManager,
     pub(crate) pointer: Option<wl_pointer::WlPointer>,
-    pub(crate) get_draw_area: for<'a> fn(&'a mut [u8], u32, u32) -> U::Type<'a>,
 
     pub(crate) widget_size: WidgetSize,
     pub(crate) widget_name: String,
@@ -155,7 +154,7 @@ impl<T: 'static + Default + Send, U: DrawAreaType, V: SurfaceTrait<T, U>> Widget
                 .create_buffer(width as i32, height as i32, stride, wl_shm::Format::Argb8888)
                 .expect("Error while creating buffer");
 
-            let mut draw_area = (self.get_draw_area)(canvas, width, height);
+            let mut draw_area = U::get_draw_area(canvas, width, height);
 
             // Render with the user render function
             let SharedWidget {

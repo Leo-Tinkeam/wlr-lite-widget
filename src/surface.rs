@@ -3,6 +3,22 @@ use crate::{MouseHandler, SurfaceBox, SurfaceData, SurfaceTrait, WidgetPosition,
 
 pub fn no_render<'a, T, U: DrawAreaType>(_canvas: &mut U::Type<'a>, _widget_width: u32, _widget_height: u32, _surface_box: SurfaceBox, _app_state: &mut T) {}
 
+pub struct WithCanvasRender;
+
+pub struct CanvasType<'a> {
+    pub canvas: &'a mut [u8],
+}
+
+impl DrawAreaType for WithCanvasRender {
+    type Type<'a> = CanvasType<'a>;
+
+    fn get_draw_area<'a>(canvas: &'a mut [u8], _width: u32, _height: u32) -> Self::Type<'a> {
+        CanvasType {
+            canvas
+        }
+    }
+}
+
 pub struct Surface<T, U: DrawAreaType> {
     pub(crate) render: Box<dyn for<'a> FnMut(&mut U::Type<'a>, u32, u32, SurfaceBox, &mut T) + Send>,
     surface_data: SurfaceData<T, U, Self>

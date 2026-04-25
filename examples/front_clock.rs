@@ -14,6 +14,14 @@ pub struct WithMyFunction;
 
 impl DrawAreaType for WithMyFunction {
     type Type<'a> = PixmapMut<'a>;
+
+    fn get_draw_area<'a>(canvas: &'a mut [u8], width: u32, height: u32) -> Self::Type<'a> {
+        PixmapMut::from_bytes(
+            canvas, 
+            width,
+            height,
+        ).expect("Erreur taille buffer / stride")
+    }
 }
 
 fn main() {
@@ -42,9 +50,8 @@ fn main() {
             bottom: None,
             right: None,
         }));
-    let mut widget = WidgetBuilder::new(widget_size, position, "MyWidget".to_string())
+    let mut widget = WidgetBuilder::new::<WithMyFunction>(widget_size, position, "MyWidget".to_string())
         .at_layer(Layer::Overlay)
-        .with_get_draw_area::<WithMyFunction>(get_draw_area)
         .build();
     widget.add_surface(surface);
 
@@ -65,14 +72,6 @@ fn main() {
     widget.run();
 
     println!("--- Fin de l'exemple ---");
-}
-
-fn get_draw_area<'a>(canvas: &'a mut [u8], width: u32, height: u32) -> PixmapMut<'a> {
-    PixmapMut::from_bytes(
-        canvas, 
-        width,
-        height,
-    ).expect("Erreur taille buffer / stride")
 }
 
 fn render(pixmap: &mut PixmapMut, widget_width: u32, widget_height: u32, _surface_box: SurfaceBox, app_state: &mut MyStruct) {

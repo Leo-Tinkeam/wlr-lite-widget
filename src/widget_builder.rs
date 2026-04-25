@@ -10,59 +10,53 @@ use std::{marker::PhantomData, sync::{Arc, Condvar, Mutex, mpsc::{Receiver, Send
 use wayland_client::{
     Connection, QueueHandle, globals::registry_queue_init,
 };
-use crate::{Margin, MouseHandler, SharedWidget, SizeUnit, SurfaceTrait, Widget, WidgetAnchor, WidgetEvent, WidgetPosition, WidgetSize, WidgetState};
+use crate::{Margin, MouseHandler, SharedWidget, SizeUnit, SurfaceTrait, Widget, WidgetAnchor, WidgetEvent, WidgetPosition, WidgetSize, WidgetState, WithCanvasRender};
 #[cfg(feature = "tiny-skia")]
-use crate::{WithSkia, get_skia_draw_area};
+use crate::WithSkia;
 
 pub trait DrawAreaType {
     type Type<'a>;
+
+    fn get_draw_area<'a>(canvas: &'a mut [u8], width: u32, height: u32) -> Self::Type<'a>;
 }
 
-pub struct WithCanvasRender;
-
-pub struct CanvasType<'a> {
-    pub canvas: &'a mut [u8],
-}
-
-impl DrawAreaType for WithCanvasRender {
-    type Type<'a> = CanvasType<'a>;
-}
-
-fn default_get_draw_area<'a>(canvas: &'a mut [u8], _width: u32, _height: u32) -> CanvasType<'a> {
-    CanvasType {
-        canvas
-    }
-}
-
-pub struct WidgetBuilder<U: DrawAreaType> {
+pub struct WidgetBuilder<U> {
     size: WidgetSize,
     position: WidgetPosition,
     name: String,
     layer: Layer,
-    get_draw_area: for<'a> fn(&'a mut [u8], u32, u32) -> U::Type<'a>,
+    _marker: PhantomData<U>
 }
 
-impl WidgetBuilder<WithCanvasRender> {
-    pub fn new(size: WidgetSize, position: WidgetPosition, name: String) -> WidgetBuilder<WithCanvasRender> {
-        WidgetBuilder::<WithCanvasRender> {
+impl WidgetBuilder<()> {
+    pub fn new<U>(size: WidgetSize, position: WidgetPosition, name: String) -> WidgetBuilder<U> {
+        WidgetBuilder::<U> {
             size,
             position,
             name,
             layer: Layer::Background,
-            get_draw_area: default_get_draw_area,
+            _marker: PhantomData,
         }
     }
-}
 
-#[cfg(feature = "tiny-skia")]
-impl WidgetBuilder<WithCanvasRender> {
+    pub fn with_standard_canvas(self) -> WidgetBuilder<WithCanvasRender> {
+        WidgetBuilder::<WithCanvasRender> {
+            size: self.size,
+            position: self.position,
+            name: self.name,
+            layer: self.layer,
+            _marker: PhantomData,
+        }
+    }
+
+    #[cfg(feature = "tiny-skia")]
     pub fn with_skia(self) -> WidgetBuilder<WithSkia> {
         WidgetBuilder::<WithSkia> {
             size: self.size,
             position: self.position,
             name: self.name,
             layer: self.layer,
-            get_draw_area: get_skia_draw_area,
+            _marker: PhantomData,
         }
     }
 }
@@ -72,19 +66,6 @@ impl<U: 'static + DrawAreaType + Send> WidgetBuilder<U> {
         self.layer = layer;
         self
     }
-
-    pub fn with_get_draw_area<V: 'static + DrawAreaType>(self, function: for<'a> fn(&'a mut [u8], u32, u32) -> V::Type<'a>) -> WidgetBuilder<V> {
-        WidgetBuilder {
-            size: self.size,
-            position: self.position,
-            name: self.name,
-            layer: self.layer,
-            get_draw_area: function,
-        }
-    }
-
-    // If we help user to render with tiny-skia or cairo, we can define with_skia() and with_cairo defined when feature is enabled and that requires that only one of the three with_ is used
-    // And there should be an enum that define which of the three is used to know which render to call (custom one or intern one)
 
     pub fn build<T: 'static + Default + Send, V: 'static + SurfaceTrait<T, U> + Send>(self) -> Widget<T, U, V> {
         // Connecting to the compositor (server)
@@ -159,7 +140,6 @@ impl<U: 'static + DrawAreaType + Send> WidgetBuilder<U> {
             layer: None,
             cursor_shape_manager,
             pointer: None,
-            get_draw_area: self.get_draw_area,
 
             widget_size: self.size,
             widget_name: self.name,
