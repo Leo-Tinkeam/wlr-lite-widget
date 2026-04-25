@@ -10,7 +10,9 @@ use std::{marker::PhantomData, sync::{Arc, Condvar, Mutex, mpsc::{Receiver, Send
 use wayland_client::{
     Connection, QueueHandle, globals::registry_queue_init,
 };
-use crate::{Margin, MouseHandler, SharedWidget, SizeUnit, Widget, WidgetAnchor, WidgetEvent, WidgetPosition, WidgetSize, WidgetState, SurfaceTrait};
+use crate::{Margin, MouseHandler, SharedWidget, SizeUnit, SurfaceTrait, Widget, WidgetAnchor, WidgetEvent, WidgetPosition, WidgetSize, WidgetState};
+#[cfg(feature = "tiny-skia")]
+use crate::{WithSkia, get_skia_draw_area};
 
 pub trait DrawAreaType {
     type Type<'a>;
@@ -48,6 +50,19 @@ impl WidgetBuilder<WithCanvasRender> {
             name,
             layer: Layer::Background,
             get_draw_area: default_get_draw_area,
+        }
+    }
+}
+
+#[cfg(feature = "tiny-skia")]
+impl WidgetBuilder<WithCanvasRender> {
+    pub fn with_skia(self) -> WidgetBuilder<WithSkia> {
+        WidgetBuilder::<WithSkia> {
+            size: self.size,
+            position: self.position,
+            name: self.name,
+            layer: self.layer,
+            get_draw_area: get_skia_draw_area,
         }
     }
 }

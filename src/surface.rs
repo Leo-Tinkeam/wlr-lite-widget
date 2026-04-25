@@ -4,7 +4,7 @@ use crate::{MouseHandler, SurfaceBox, SurfaceData, SurfaceTrait, WidgetPosition,
 pub fn no_render<'a, T, U: DrawAreaType>(_canvas: &mut U::Type<'a>, _widget_width: u32, _widget_height: u32, _surface_box: SurfaceBox, _app_state: &mut T) {}
 
 pub struct Surface<T, U: DrawAreaType> {
-    pub(crate) render: Box<dyn for<'a> FnMut(&mut U::Type<'a>, u32, u32, SurfaceBox, &mut T) + Send>, // TODO: Help user to create these for exemple fill_color() and a custom type for advanced shapes
+    pub(crate) render: Box<dyn for<'a> FnMut(&mut U::Type<'a>, u32, u32, SurfaceBox, &mut T) + Send>,
     surface_data: SurfaceData<T, U, Self>
 }
 
