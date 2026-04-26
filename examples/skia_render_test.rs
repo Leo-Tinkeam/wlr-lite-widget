@@ -1,4 +1,4 @@
-use wlr_lite_widget::{MouseButton, MouseResponse, SizeUnit, SkiaDrawArea, SkiaSurface, SurfaceBox, SurfaceTrait, WidgetBuilder, WidgetPosition, WidgetSize};
+use wlr_lite_widget::{MouseButton, MouseResponse, SizeUnit, SkiaDrawArea, SkiaSurface, StandardDrawArea, SurfaceBox, SurfaceTrait, WidgetBuilder, WidgetPosition, WidgetSize};
 use std::thread;
 use std::time::Duration;
 

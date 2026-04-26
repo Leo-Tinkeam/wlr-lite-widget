@@ -1,6 +1,6 @@
 use std::marker::PhantomData;
 use cairo::{Context, Format, ImageSurface};
-use crate::{DrawAreaType, MouseHandler, SurfaceBox, SurfaceData, SurfaceTrait, WidgetPosition, WidgetSize, get_next_surface_id};
+use crate::{DrawAreaType, MouseHandler, StandardDrawArea, SurfaceBox, SurfaceData, SurfaceTrait, WidgetPosition, WidgetSize, get_next_surface_id};
 
 pub struct WithCairo;
 
@@ -79,8 +79,8 @@ pub struct CairoDrawArea<'a> {
     _marker: PhantomData<&'a mut [u8]>,
 }
 
-impl<'a> CairoDrawArea<'a> {
-    pub fn add_rect(&mut self, left: u32, top: u32, right: u32, bottom: u32, r: u8, g: u8, b: u8, a: u8) {
+impl<'a> StandardDrawArea for CairoDrawArea<'a> {
+    fn add_rect(&mut self, left: u32, top: u32, right: u32, bottom: u32, r: u8, g: u8, b: u8, a: u8) {
         let width = (right - left) as f64;
         let height = (bottom - top) as f64;
         self.context.rectangle(

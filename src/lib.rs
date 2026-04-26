@@ -18,7 +18,7 @@ pub use smithay_client_toolkit::shell::wlr_layer::{Anchor, Layer};
 #[cfg(feature = "tiny-skia")]
 pub use skia_surface::{SkiaDrawArea, SkiaSurface, WithSkia};
 pub use surface::{CanvasType, no_render, Surface, WithCanvasRender};
-pub use surface_common::{SurfaceBox, SurfaceTrait};
+pub use surface_common::{StandardDrawArea, SurfaceBox, SurfaceTrait};
 pub use widget_builder::{DrawAreaType, WidgetBuilder};
 
 pub(crate) use mouse_handler::MouseHandler;

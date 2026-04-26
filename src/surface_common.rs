@@ -20,6 +20,10 @@ pub(crate) fn get_next_surface_id() -> i32 {
     NEXT_SURFACE_ID.fetch_add(1, Ordering::Relaxed)
 }
 
+pub trait StandardDrawArea {
+    fn add_rect(&mut self, left: u32, top: u32, right: u32, bottom: u32, r: u8, g: u8, b: u8, a: u8);
+}
+
 #[derive(Clone, Copy)]
 pub struct SurfaceBox {
     pub(crate) min_x: u32,

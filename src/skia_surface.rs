@@ -1,6 +1,6 @@
 use std::marker::PhantomData;
 use tiny_skia::{Paint, PixmapMut, Rect, Transform};
-use crate::{MouseHandler, SurfaceBox, SurfaceData, SurfaceTrait, WidgetPosition, WidgetSize, get_next_surface_id, widget_builder::DrawAreaType};
+use crate::{MouseHandler, StandardDrawArea, SurfaceBox, SurfaceData, SurfaceTrait, WidgetPosition, WidgetSize, get_next_surface_id, widget_builder::DrawAreaType};
 
 pub struct WithSkia;
 
@@ -67,8 +67,8 @@ pub struct SkiaDrawArea<'a> {
     pixmap: PixmapMut<'a>,
 }
 
-impl<'a> SkiaDrawArea<'a> {
-    pub fn add_rect(&mut self, left: u32, top: u32, right: u32, bottom: u32, r: u8, g: u8, b: u8, a: u8) {
+impl<'a> StandardDrawArea for SkiaDrawArea<'a> {
+    fn add_rect(&mut self, left: u32, top: u32, right: u32, bottom: u32, r: u8, g: u8, b: u8, a: u8) {
         let mut paint = Paint::default();
         let rect = Rect::from_ltrb(
             left as f32,

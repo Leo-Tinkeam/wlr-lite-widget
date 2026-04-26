@@ -1,4 +1,4 @@
-use wlr_lite_widget::{CairoDrawArea, CairoSurface, MouseButton, MouseResponse, SizeUnit, SurfaceBox, SurfaceTrait, WidgetBuilder, WidgetPosition, WidgetSize};
+use wlr_lite_widget::{CairoDrawArea, CairoSurface, MouseButton, MouseResponse, SizeUnit, SurfaceBox, StandardDrawArea, SurfaceTrait, WidgetBuilder, WidgetPosition, WidgetSize};
 use std::thread;
 use std::time::Duration;
 
