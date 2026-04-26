@@ -1,5 +1,7 @@
 mod widget;
 mod settings;
+#[cfg(feature = "cairo-rs")]
+mod cairo_surface;
 #[cfg(feature = "tiny-skia")]
 mod skia_surface;
 mod surface;
@@ -7,6 +9,8 @@ mod surface_common;
 mod mouse_handler;
 mod widget_builder;
 
+#[cfg(feature = "cairo-rs")]
+pub use cairo_surface::{CairoDrawArea, CairoSurface, WithCairo};
 pub use mouse_handler::{MouseButton, MouseResponse};
 pub use settings::{SizeUnit, WidgetAnchor, WidgetMargin, WidgetPosition, WidgetSize};
 pub use smithay_client_toolkit::seat::pointer::AxisScroll;

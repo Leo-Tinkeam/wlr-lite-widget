@@ -10,6 +10,8 @@ use std::{marker::PhantomData, sync::{Arc, Condvar, Mutex, mpsc::{Receiver, Send
 use wayland_client::{
     Connection, QueueHandle, globals::registry_queue_init,
 };
+#[cfg(feature = "cairo-rs")]
+use crate::cairo_surface::WithCairo;
 use crate::{Margin, MouseHandler, SharedWidget, SizeUnit, SurfaceTrait, Widget, WidgetAnchor, WidgetEvent, WidgetPosition, WidgetSize, WidgetState, WithCanvasRender};
 #[cfg(feature = "tiny-skia")]
 use crate::WithSkia;
@@ -52,6 +54,17 @@ impl WidgetBuilder<()> {
     #[cfg(feature = "tiny-skia")]
     pub fn with_skia(self) -> WidgetBuilder<WithSkia> {
         WidgetBuilder::<WithSkia> {
+            size: self.size,
+            position: self.position,
+            name: self.name,
+            layer: self.layer,
+            _marker: PhantomData,
+        }
+    }
+
+    #[cfg(feature = "cairo-rs")]
+    pub fn with_cairo(self) -> WidgetBuilder<WithCairo> {
+        WidgetBuilder::<WithCairo> {
             size: self.size,
             position: self.position,
             name: self.name,
