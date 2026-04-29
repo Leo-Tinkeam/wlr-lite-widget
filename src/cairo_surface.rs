@@ -97,4 +97,8 @@ impl<'a> StandardDrawArea for CairoDrawArea<'a> {
         );
         self.context.fill().expect("Cairo draw error");
     }
+
+    fn add_text(&mut self, text: &str, font_bytes: &[u8], left: u32, top: u32, text_size: f32, r: u8, g: u8, b: u8, a: u8) -> Result<(), crate::surface_common::DrawTextError> {
+        panic!(); // TODO
+    }
 }

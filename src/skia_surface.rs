@@ -1,6 +1,7 @@
 use std::marker::PhantomData;
-use tiny_skia::{Paint, PixmapMut, Rect, Transform};
-use crate::{MouseHandler, StandardDrawArea, SurfaceBox, SurfaceData, SurfaceTrait, WidgetPosition, WidgetSize, get_next_surface_id, widget_builder::DrawAreaType};
+use swash::{FontRef, scale::{Render, ScaleContext, Source, StrikeWith, image::Content}, shape::ShapeContext, zeno::Format};
+use tiny_skia::{Color, Paint, Pixmap, PixmapMut, PixmapPaint, Rect, Transform};
+use crate::{MouseHandler, StandardDrawArea, SurfaceBox, SurfaceData, SurfaceTrait, WidgetPosition, WidgetSize, get_next_surface_id, surface_common::DrawTextError, widget_builder::DrawAreaType};
 
 pub struct WithSkia;
 
@@ -83,5 +84,86 @@ impl<'a> StandardDrawArea for SkiaDrawArea<'a> {
             Transform::identity(),
             None,
         );
+    }
+
+    fn add_text(&mut self, text: &str, font_bytes: &[u8], left: u32, top: u32, text_size: f32, r: u8, g: u8, b: u8, a: u8) -> Result<(), DrawTextError> {
+        let text_color = Color::from_rgba8(r, g, b, a);
+        let font = FontRef::from_index(font_bytes, 0)
+            .ok_or(DrawTextError::LoadFileError)?;
+        let mut shape_context = ShapeContext::new();
+        let mut shaper = shape_context
+            .builder(font)
+            .size(text_size)
+            .build();
+        shaper.add_str(text);
+        let mut scale_context = ScaleContext::new();
+        let mut scaler = scale_context
+            .builder(font)
+            .size(text_size)
+            .hint(true)
+            .build();
+
+        let mut current_x = left as f32;
+        let y = top as f32 + text_size;
+        shaper.shape_with(|cluster| {
+            for glyph in cluster.glyphs {
+                let image = Render::new(&[
+                        Source::ColorOutline(0),
+                        Source::ColorBitmap(StrikeWith::BestFit),
+                        Source::Outline])
+                    .format(Format::Alpha)
+                    .render(&mut scaler, glyph.id);
+
+                if let Some(image) = image {
+                    let placement = image.placement;
+                    let img_x = current_x + placement.left as f32 + glyph.x;
+                    let img_y = y - placement.top as f32 + glyph.y;
+
+                    if let Some(mut glyph_pixmap) = Pixmap::new(placement.width, placement.height) {
+                        match image.content {
+                            Content::Mask => {
+                                for (i, pixel) in glyph_pixmap.pixels_mut().iter_mut().enumerate() {
+                                    let alpha = image.data[i] as f32 / 255.0;
+                                    let c = Color::from_rgba( // Wayland is BGRA
+                                        text_color.blue(),
+                                        text_color.green(),
+                                        text_color.red(),
+                                        text_color.alpha() * alpha,
+                                    ).unwrap_or(Color::TRANSPARENT);
+                                    *pixel = c.premultiply().to_color_u8();
+                                }
+                            },
+                            Content::Color => {
+                                for (i, pixel) in glyph_pixmap.pixels_mut().iter_mut().enumerate() {
+                                    let c = Color::from_rgba( // Wayland is BGRA
+                                        image.data[i * 4 + 2] as f32 / 255.0,
+                                        image.data[i * 4 + 1] as f32 / 255.0,
+                                        image.data[i * 4] as f32 / 255.0,
+                                        (image.data[i * 4 + 3] as f32 / 255.0) * text_color.alpha(),
+                                    ).unwrap_or(Color::TRANSPARENT);
+                                    *pixel = c.premultiply().to_color_u8();
+                                }
+                            },
+                            Content::SubpixelMask => {
+                                // Should not be called since we are using Format::Alpha, we just support Content:Color for emojis
+                            }
+                        }
+                        
+                        self.pixmap.draw_pixmap(
+                            img_x as i32,
+                            img_y as i32,
+                            glyph_pixmap.as_ref(),
+                            &PixmapPaint::default(),
+                            Transform::identity(),
+                            None,
+                        );
+                    }
+                }
+                current_x += glyph.advance;
+            }
+        });
+
+
+        Ok(())
     }
 }

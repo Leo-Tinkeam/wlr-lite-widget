@@ -1,4 +1,4 @@
-use std::{marker::PhantomData, sync::{atomic::{AtomicI32, Ordering}, mpsc::Sender}};
+use std::{io::Error, marker::PhantomData, sync::{atomic::{AtomicI32, Ordering}, mpsc::Sender}};
 use smithay_client_toolkit::{seat::pointer::AxisScroll, shell::{WaylandSurface, wlr_layer::LayerSurface}};
 use crate::{MouseButton, MouseHandler, MouseResponse, WidgetPosition, WidgetSize, widget::WidgetEvent, widget_builder::DrawAreaType};
 
@@ -22,6 +22,8 @@ pub(crate) fn get_next_surface_id() -> i32 {
 
 pub trait StandardDrawArea {
     fn add_rect(&mut self, left: u32, top: u32, right: u32, bottom: u32, r: u8, g: u8, b: u8, a: u8);
+
+    fn add_text(&mut self, text: &str, font_bytes: &[u8], left: u32, top: u32, text_size: f32, r: u8, g: u8, b: u8, a: u8) -> Result<(), DrawTextError>;
 }
 
 #[derive(Clone, Copy)]
@@ -170,4 +172,15 @@ pub trait SurfaceTrait<T, U: DrawAreaType>: Sized {
         }
         draw_surfaces(&mut self.get_surface_data_mut().childs_surfaces, app_state, surface_width, surface_height, layer, draw_area, total_width, total_height, force_child_redraw);
     }
+}
+
+pub fn load_font(font_path: &str ) -> Result<Vec<u8>, Error> {
+    Ok(
+        std::fs::read(font_path)?
+    )
+}
+
+#[derive(Debug)]
+pub enum DrawTextError {
+    LoadFileError,
 }
