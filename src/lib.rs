@@ -5,9 +5,11 @@ mod cairo_surface;
 #[cfg(feature = "tiny-skia")]
 mod skia_surface;
 mod surface;
-mod surface_common;
 mod mouse_handler;
 mod widget_builder;
+
+mod backend_common;
+use backend_common::surface_common;
 
 #[cfg(feature = "cairo-rs")]
 pub use cairo_surface::{CairoDrawArea, CairoSurface, WithCairo};

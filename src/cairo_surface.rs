@@ -1,7 +1,7 @@
 use std::marker::PhantomData;
 use cairo::{Context, Format, ImageSurface};
-use swash::{FontRef, scale::{Render, ScaleContext, Source, StrikeWith, image::Content}, shape::ShapeContext, zeno::Format as FormatZeno};
-use crate::{DrawAreaType, MouseHandler, StandardDrawArea, SurfaceBox, SurfaceData, SurfaceTrait, WidgetPosition, WidgetSize, get_next_surface_id, surface_common::DrawTextError};
+use swash::scale::image::Content;
+use crate::{DrawAreaType, MouseHandler, StandardDrawArea, SurfaceBox, SurfaceData, SurfaceTrait, WidgetPosition, WidgetSize, backend_common::text_shaper::render_text, get_next_surface_id};
 
 pub struct WithCairo;
 
@@ -101,81 +101,52 @@ impl<'a> StandardDrawArea for CairoDrawArea<'a> {
 
     fn add_text(&mut self, text: &str, font_bytes: &[u8], left: u32, top: u32, text_size: f32, r: u8, g: u8, b: u8, a: u8) -> Result<(), crate::surface_common::DrawTextError> {
         let (r, g, b, a) = (r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0, a as f32 / 255.0);
-        let font = FontRef::from_index(font_bytes, 0)
-            .ok_or(DrawTextError::LoadFileError)?;
-        let mut shape_context = ShapeContext::new();
-        let mut shaper = shape_context
-            .builder(font)
-            .size(text_size)
-            .build();
-        shaper.add_str(text);
-        let mut scale_context = ScaleContext::new();
-        let mut scaler = scale_context
-            .builder(font)
-            .size(text_size)
-            .hint(true)
-            .build();
-
-        let mut current_x = left as f32;
-        let y = top as f32 + text_size;
-        shaper.shape_with(|cluster| {
-            for glyph in cluster.glyphs {
-                let image = Render::new(&[
-                        Source::ColorOutline(0),
-                        Source::ColorBitmap(StrikeWith::BestFit),
-                        Source::Outline])
-                    .format(FormatZeno::Alpha)
-                    .render(&mut scaler, glyph.id);
-
-                if let Some(image) = image {
-                    let placement = image.placement;
-                    let img_x = current_x + placement.left as f32 + glyph.x;
-                    let img_y = y - placement.top as f32 + glyph.y;
-
-                    if let Ok(mut surface) = cairo::ImageSurface::create(
-                        cairo::Format::ARgb32,
-                        placement.width as i32,
-                        placement.height as i32,
-                    ) {
-                        if let Ok(mut data) = surface.data() {
-                            match image.content {
-                                Content::Mask => {
-                                    for (out_pixel, &alpha_byte) in data.chunks_exact_mut(4).zip(image.data.iter()) {
-                                        let final_alpha = alpha_byte as f32 * a;
-                                        let a_byte = (final_alpha) as u32;
-                                        let r_byte = (r * final_alpha) as u32;
-                                        let g_byte = (g * final_alpha) as u32;
-                                        let b_byte = (b * final_alpha) as u32;
-                                        let pixel_u32 = (a_byte << 24) | (r_byte << 16) | (g_byte << 8) | b_byte;
-                                        out_pixel.copy_from_slice(&pixel_u32.to_ne_bytes());
-                                    }
-                                },
-                                Content::Color => {
-                                    for (out_pixel, in_pixel) in data.chunks_exact_mut(4).zip(image.data.chunks_exact(4)) {
-                                        let final_alpha = in_pixel[3] as f32 * a / 255.0;
-                                        let a_byte = (final_alpha * 255.0) as u32;
-                                        let r_byte = (in_pixel[0] as f32 * final_alpha) as u32;
-                                        let g_byte = (in_pixel[1] as f32 * final_alpha) as u32;
-                                        let b_byte = (in_pixel[2] as f32 * final_alpha) as u32;
-                                        let pixel_u32 = (a_byte << 24) | (r_byte << 16) | (g_byte << 8) | b_byte;
-                                        out_pixel.copy_from_slice(&pixel_u32.to_ne_bytes());
-                                    }
-                                },
-                                Content::SubpixelMask => {
-                                    // Should not be called since we are using Format::Alpha, we just support Content:Color for emojis
+        render_text(|image, placement, img_x, img_y|
+            {
+                if let Ok(mut surface) = cairo::ImageSurface::create(
+                    cairo::Format::ARgb32,
+                    placement.width as i32,
+                    placement.height as i32,
+                ) {
+                    if let Ok(mut data) = surface.data() {
+                        match image.content {
+                            Content::Mask => {
+                                for (out_pixel, &alpha_byte) in data.chunks_exact_mut(4).zip(image.data.iter()) {
+                                    let final_alpha = alpha_byte as f32 * a;
+                                    let a_byte = (final_alpha) as u32;
+                                    let r_byte = (r * final_alpha) as u32;
+                                    let g_byte = (g * final_alpha) as u32;
+                                    let b_byte = (b * final_alpha) as u32;
+                                    let pixel_u32 = (a_byte << 24) | (r_byte << 16) | (g_byte << 8) | b_byte;
+                                    out_pixel.copy_from_slice(&pixel_u32.to_ne_bytes());
                                 }
+                            },
+                            Content::Color => {
+                                for (out_pixel, in_pixel) in data.chunks_exact_mut(4).zip(image.data.chunks_exact(4)) {
+                                    let final_alpha = in_pixel[3] as f32 * a / 255.0;
+                                    let a_byte = (final_alpha * 255.0) as u32;
+                                    let r_byte = (in_pixel[0] as f32 * final_alpha) as u32;
+                                    let g_byte = (in_pixel[1] as f32 * final_alpha) as u32;
+                                    let b_byte = (in_pixel[2] as f32 * final_alpha) as u32;
+                                    let pixel_u32 = (a_byte << 24) | (r_byte << 16) | (g_byte << 8) | b_byte;
+                                    out_pixel.copy_from_slice(&pixel_u32.to_ne_bytes());
+                                }
+                            },
+                            Content::SubpixelMask => {
+                                // Should not be called since we are using Format::Alpha, we just support Content:Color for emojis
                             }
-                        } 
-                        surface.mark_dirty();
-                        self.context.set_source_surface(&surface, img_x as f64, img_y as f64).unwrap();
-                        self.context.paint().unwrap();
-                    }
+                        }
+                    } 
+                    surface.mark_dirty();
+                    self.context.set_source_surface(&surface, img_x as f64, img_y as f64).unwrap();
+                    self.context.paint().unwrap();
                 }
-                current_x += glyph.advance;
-            }
-        });
-
-
-        Ok(())
+            },
+            text,
+            font_bytes,
+            left,
+            top,
+            text_size,
+        )
     }
 }
