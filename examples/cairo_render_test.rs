@@ -1,10 +1,11 @@
-use wlr_lite_widget::{CairoDrawArea, CairoSurface, MouseButton, MouseResponse, SizeUnit, SurfaceBox, StandardDrawArea, SurfaceTrait, WidgetBuilder, WidgetPosition, WidgetSize};
+use wlr_lite_widget::{CairoDrawArea, CairoSurface, MouseButton, MouseResponse, SizeUnit, StandardDrawArea, SurfaceBox, SurfaceTrait, WidgetBuilder, WidgetPosition, WidgetSize, load_font};
 use std::thread;
 use std::time::Duration;
 
 #[derive(Default, Clone)]
 pub struct MyStruct {
     clicked: bool,
+    font_bytes: Vec<u8>,
 }
 
 fn main() {
@@ -43,7 +44,11 @@ fn main() {
 
     let thread_widget = widget.clone();
     thread::spawn(move || {
-        let mut my_state = MyStruct { clicked: true };
+        let mut my_state = MyStruct {
+            clicked: true,
+            font_bytes: load_font("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf").expect("Error while loading font"),
+            //font_bytes: load_font("/usr/share/fonts/truetype/noto/NotoColorEmoji.ttf").expect("Error while loading font"), // For emojis only (🚀🌟👋) -> // TODO support fallback fonts
+        };
         loop {
             my_state.clicked = !my_state.clicked;
             thread_widget.update_app_state(my_state.clone());
@@ -63,6 +68,7 @@ fn main() {
 fn render(canvas_struct: &mut CairoDrawArea, widget_width: u32, widget_height: u32, _surface_box: SurfaceBox, app_state: &mut MyStruct) {
     if app_state.clicked {
         canvas_struct.add_rect(0, 0, widget_width, widget_height, 255, 0, 0, 255);
+        canvas_struct.add_text("This is a text example ! 🚀🌟👋", &app_state.font_bytes, 0, 0, 20f32, 0, 255, 0, 255).expect("Erreur lors du dessin du texte");
     } else {
         canvas_struct.add_rect(0, 0, widget_width, widget_height, 0, 255, 0, 255);
     }
