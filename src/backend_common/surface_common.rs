@@ -24,6 +24,10 @@ pub trait StandardDrawArea {
     fn add_rect(&mut self, left: u32, top: u32, right: u32, bottom: u32, r: u8, g: u8, b: u8, a: u8);
 
     fn add_text(&mut self, text: &str, font_bytes: &[u8], left: u32, top: u32, text_size: f32, r: u8, g: u8, b: u8, a: u8) -> Result<(), DrawTextError>;
+
+    fn add_jpg(&mut self, path: &str, x: u32, y: u32, w: u32, h: u32) -> Result<(), DrawImageError>;
+    // TODO: Add the same for : png (zune-png) ; jxl (jxl-oxyde)
+    // TODO: Also add this for Vec<u8> to avoid reloading the image each time (or add a "store_image" boolean to add_image) -> Also allow to store transformed image
 }
 
 #[derive(Clone, Copy)]
@@ -183,4 +187,12 @@ pub fn load_font(font_path: &str ) -> Result<Vec<u8>, Error> {
 #[derive(Debug)]
 pub enum DrawTextError {
     LoadFileError,
+}
+
+#[derive(Debug)]
+pub enum DrawImageError {
+    LoadImageError,
+    DecodeImageError,
+    NoMetaDataError,
+    InternalError,
 }

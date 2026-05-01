@@ -1,7 +1,7 @@
 use std::marker::PhantomData;
 use swash::scale::image::Content;
-use tiny_skia::{Color, Paint, Pixmap, PixmapMut, PixmapPaint, Rect, Transform};
-use crate::{MouseHandler, StandardDrawArea, SurfaceBox, SurfaceData, SurfaceTrait, WidgetPosition, WidgetSize, backend_common::text_shaper::render_text, get_next_surface_id, surface_common::DrawTextError, widget_builder::DrawAreaType};
+use tiny_skia::{Color, FilterQuality, Paint, Pixmap, PixmapMut, PixmapPaint, PixmapRef, Rect, Transform};
+use crate::{MouseHandler, StandardDrawArea, SurfaceBox, SurfaceData, SurfaceTrait, WidgetPosition, WidgetSize, backend_common::{image_loader::render_jpg, surface_common::DrawImageError, text_shaper::render_text}, get_next_surface_id, surface_common::DrawTextError, widget_builder::DrawAreaType};
 
 pub struct WithSkia;
 
@@ -135,6 +135,40 @@ impl<'a> StandardDrawArea for SkiaDrawArea<'a> {
             left,
             top,
             text_size,
+        )
+    }
+
+    fn add_jpg(&mut self, path: &str, x: u32, y: u32, w: u32, h: u32) -> Result<(), DrawImageError> {
+        render_jpg(|pixels, img_width, img_height|
+            {
+                let src_pixmap = PixmapRef::from_bytes(&pixels, img_width, img_height)
+                    .ok_or(DrawImageError::InternalError)?;
+                let transform;
+                if img_width != w || img_height != h {
+                    let width_scale_factor = w as f32 / img_width as f32;
+                    let height_scale_factor = h as f32 / img_height as f32;
+                    transform = Transform::identity().post_scale(width_scale_factor, height_scale_factor);
+                } else {
+                    transform = Transform::identity();
+                }
+                let paint = PixmapPaint {
+                    quality: FilterQuality::Bilinear,
+                    opacity: 1.0,
+                    ..Default::default()
+                };
+
+                self.pixmap.draw_pixmap(
+                    x as i32,
+                    y as i32,
+                    src_pixmap,
+                    &paint,
+                    transform,
+                    None,
+                );
+
+                Ok(())
+            },
+            path,
         )
     }
 }

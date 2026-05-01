@@ -9,11 +9,12 @@ wayland-client = "0.31.12"
 tiny-skia = { version = "0.12.0", optional = true }
 cairo-rs = { version = "0.22.0", optional = true }
 swash = { version = "0.2.7", optional = true }
+zune-jpeg = { version = "0.5.15", optional = true }
 
 [dev-dependencies]
 tiny-skia = "0.12.0"
 chrono = "0.4"
 
 [features]
-tiny-skia = ["dep:tiny-skia", "dep:swash"]
-cairo-rs = ["dep:cairo-rs", "dep:swash"]
+tiny-skia = ["dep:tiny-skia", "dep:swash", "dep:zune-jpeg"]
+cairo-rs = ["dep:cairo-rs", "dep:swash", "dep:zune-jpeg"]

@@ -1,7 +1,7 @@
 use std::marker::PhantomData;
 use cairo::{Context, Format, ImageSurface};
 use swash::scale::image::Content;
-use crate::{DrawAreaType, MouseHandler, StandardDrawArea, SurfaceBox, SurfaceData, SurfaceTrait, WidgetPosition, WidgetSize, backend_common::text_shaper::render_text, get_next_surface_id};
+use crate::{DrawAreaType, MouseHandler, StandardDrawArea, SurfaceBox, SurfaceData, SurfaceTrait, WidgetPosition, WidgetSize, backend_common::{image_loader::render_jpg, surface_common::DrawImageError, text_shaper::render_text}, get_next_surface_id};
 
 pub struct WithCairo;
 
@@ -147,6 +147,36 @@ impl<'a> StandardDrawArea for CairoDrawArea<'a> {
             left,
             top,
             text_size,
+        )
+    }
+
+    fn add_jpg(&mut self, path: &str, x: u32, y: u32, w: u32, h: u32) -> Result<(), DrawImageError> {
+        render_jpg(|pixels, img_width, img_height|
+            {
+                let mut surface = ImageSurface::create(
+                    Format::ARgb32, 
+                    img_width as i32, 
+                    img_height as i32
+                ).map_err(|_| DrawImageError::InternalError)?;
+                {
+                    let mut data = surface.data().map_err(|_| DrawImageError::InternalError)?;
+                    data.copy_from_slice(&pixels);
+                }
+
+                if img_width != w || img_height != h {
+                    let width_scale_factor = w as f64 / img_width as f64;
+                    let height_scale_factor = h as f64 / img_height as f64;
+                    self.context.scale(width_scale_factor, height_scale_factor);
+                }
+
+                self.context.set_source_surface(&surface, x as f64, y as f64)
+                    .map_err(|_| DrawImageError::InternalError)?;
+                self.context.source().set_filter(cairo::Filter::Bilinear);
+                self.context.paint().map_err(|_| DrawImageError::InternalError)?;
+
+                Ok(())
+            },
+            path,
         )
     }
 }

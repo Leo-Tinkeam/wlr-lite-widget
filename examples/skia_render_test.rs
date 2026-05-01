@@ -71,5 +71,6 @@ fn render(canvas_struct: &mut SkiaDrawArea, widget_width: u32, widget_height: u3
         canvas_struct.add_text("This is a text example ! 🚀🌟👋", &app_state.font_bytes, 0, 0, 20f32, 0, 0, 0, 255).expect("Error while drawing text");
     } else {
         canvas_struct.add_rect(0, 0, widget_width, widget_height, 0, 255, 0, 255);
+        canvas_struct.add_jpg("image.jpg", 100, 0, 160, 90).expect("Error while drawing jpg image");
     }
 }
