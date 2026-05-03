@@ -1,10 +1,5 @@
 use smithay_client_toolkit::{
-    compositor::CompositorState,
-    output::OutputState,
-    registry::RegistryState,
-    seat::{SeatState, pointer::cursor_shape::CursorShapeManager,},
-    shell::{wlr_layer::{Layer, LayerShell}},
-    shm::Shm,
+    activation::{ActivationState, RequestData}, compositor::CompositorState, output::OutputState, registry::RegistryState, seat::{SeatState, pointer::cursor_shape::CursorShapeManager,}, shell::{WaylandSurface, wlr_layer::{Layer, LayerShell}, xdg::{XdgShell, window::WindowDecorations}}, shm::{Shm, slot::SlotPool}
 };
 use std::{marker::PhantomData, sync::{Arc, Condvar, Mutex, mpsc::{Receiver, Sender, channel}}, thread};
 use wayland_client::{
@@ -26,6 +21,7 @@ pub struct WidgetBuilder<U> {
     size: WidgetSize,
     position: WidgetPosition,
     name: String,
+    is_window: bool,
     layer: Layer,
     _marker: PhantomData<U>
 }
@@ -36,6 +32,7 @@ impl WidgetBuilder<()> {
             size,
             position,
             name,
+            is_window: false,
             layer: Layer::Background,
             _marker: PhantomData,
         }
@@ -46,6 +43,7 @@ impl WidgetBuilder<()> {
             size: self.size,
             position: self.position,
             name: self.name,
+            is_window: self.is_window,
             layer: self.layer,
             _marker: PhantomData,
         }
@@ -57,6 +55,7 @@ impl WidgetBuilder<()> {
             size: self.size,
             position: self.position,
             name: self.name,
+            is_window: self.is_window,
             layer: self.layer,
             _marker: PhantomData,
         }
@@ -68,6 +67,7 @@ impl WidgetBuilder<()> {
             size: self.size,
             position: self.position,
             name: self.name,
+            is_window: self.is_window,
             layer: self.layer,
             _marker: PhantomData,
         }
@@ -77,6 +77,11 @@ impl WidgetBuilder<()> {
 impl<U: 'static + DrawAreaType + Send> WidgetBuilder<U> {
     pub fn at_layer(mut self, layer: Layer) -> Self {
         self.layer = layer;
+        self
+    }
+
+    pub fn is_window(mut self, is_window: bool) -> Self {
+        self.is_window = is_window;
         self
     }
 
@@ -92,12 +97,40 @@ impl<U: 'static + DrawAreaType + Send> WidgetBuilder<U> {
         // configuring surfaces to be presented.
         let compositor = CompositorState::bind(&globals, &qh).expect("wl_compositor is not available");
 
-        // This app uses the wlr layer shell, which may not be available with every compositor.
-        let layer_shell = LayerShell::bind(&globals, &qh).expect("layer shell is not available");
-        let cursor_shape_manager = CursorShapeManager::bind(&globals, &qh).expect("cursor manager is not available");
+        let layer_shell;
+        let xdg_activation;
+        let window;
+        if self.is_window {
+            layer_shell = None;
+            let xdg_shell = XdgShell::bind(&globals, &qh).expect("xdg shell is not available");
+            xdg_activation = ActivationState::bind(&globals, &qh).ok();
+            let window_surface = compositor.create_surface(&qh);
+            let window_some = xdg_shell.create_window(window_surface, WindowDecorations::RequestServer, &qh);
+
+            window_some.set_title("Windows Default Name"); // TODO : custom this
+            window_some.set_app_id("wlr-widget-lite.window");
+            window_some.set_min_size(Some((256, 256)));
+            window_some.commit();
+            if let Some(activation) = xdg_activation.as_ref() {
+                activation.request_token(
+                    &qh,
+                    RequestData {
+                        seat_and_serial: None,
+                        surface: Some(window_some.wl_surface().clone()),
+                        app_id: Some(String::from("wlr-widget-lite.window")),
+                    },
+                )
+            }
+            window = Some(window_some);
+        } else {
+            layer_shell = Some(LayerShell::bind(&globals, &qh).expect("layer shell is not available"));
+            xdg_activation = None;
+            window = None;
+        }
 
         // We use wl_shm to allow software rendering to a buffer we share with the compositor process.
         let shm = Shm::bind(&globals, &qh).expect("wl_shm is not available");
+        let cursor_shape_manager = CursorShapeManager::bind(&globals, &qh).expect("cursor manager is not available");
 
         let (widget_anchor, margin) = match self.position {
             WidgetPosition::Coordinates(x, y) => {(
@@ -117,6 +150,19 @@ impl<U: 'static + DrawAreaType + Send> WidgetBuilder<U> {
             }
         };
 
+        let pool;
+        let width;
+        let height;
+        if self.is_window {
+            pool = Some(SlotPool::new(256 * 256 * 4, &shm).expect("Failed to create pool"));
+            width = Some(256);
+            height = Some(256);
+        } else {
+            pool = None;
+            width = None;
+            height = None;
+        }
+
         let (tx, rx): (Sender<WidgetEvent>, Receiver<WidgetEvent>) = channel();
         let shared_widget = Arc::new((
             Mutex::new(SharedWidget {
@@ -127,11 +173,12 @@ impl<U: 'static + DrawAreaType + Send> WidgetBuilder<U> {
                 frame_asked: false,
                 force_redraw: false,
                 wl_surface: None,
+                window,
                 conn,
 
                 mouse_handler: MouseHandler::default(),
-                width: None,
-                height: None,
+                width,
+                height,
                 _marker: PhantomData,
             }),
             Condvar::new(),
@@ -145,10 +192,11 @@ impl<U: 'static + DrawAreaType + Send> WidgetBuilder<U> {
             output_state: OutputState::new(&globals, &qh),
             shm,
             compositor: compositor,
-            layer_shell: layer_shell,
+            layer_shell,
+            xdg_activation,
 
             need_redraw: true,
-            pool: None,
+            pool,
             
             layer: None,
             cursor_shape_manager,

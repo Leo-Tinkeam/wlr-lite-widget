@@ -1,24 +1,15 @@
 use smithay_client_toolkit::{
-    compositor::{CompositorHandler, CompositorState},
-    delegate_compositor, delegate_layer, delegate_output,
-    delegate_pointer, delegate_registry, delegate_seat,
-    delegate_shm,
-    output::{OutputHandler, OutputState},
-    registry::{ProvidesRegistryState, RegistryState},
-    registry_handlers,
-    seat::{Capability, SeatHandler, SeatState, pointer::cursor_shape::CursorShapeManager,},
-    shell::{
+    activation::{ActivationHandler, ActivationState, RequestData}, compositor::{CompositorHandler, CompositorState}, delegate_activation, delegate_compositor, delegate_layer, delegate_output, delegate_pointer, delegate_registry, delegate_seat, delegate_shm, delegate_xdg_shell, delegate_xdg_window, output::{OutputHandler, OutputState}, registry::{ProvidesRegistryState, RegistryState}, registry_handlers, seat::{Capability, SeatHandler, SeatState, pointer::cursor_shape::CursorShapeManager,}, shell::{
         WaylandSurface,
         wlr_layer::{
             Anchor, Layer, LayerShell,
             LayerShellHandler, LayerSurface,LayerSurfaceConfigure,
-        },
-    },
-    shm::{Shm, ShmHandler, slot::SlotPool},
+        }, xdg::window::{Window, WindowConfigure, WindowHandler},
+    }, shm::{Shm, ShmHandler, slot::SlotPool}
 };
 use std::{marker::PhantomData, sync::{Arc, Condvar, Mutex, mpsc::Sender}};
 use wayland_client::{
-    Connection, Dispatch, QueueHandle, protocol::{wl_callback, wl_output, wl_pointer, wl_seat, wl_shm, wl_surface}
+    Connection, Dispatch, QueueHandle, protocol::{wl_callback, wl_output, wl_pointer, wl_seat, wl_shm, wl_surface::{self, WlSurface}}
 };
 use crate::{Margin, MouseHandler, WidgetSize, SurfaceTrait, widget_builder::DrawAreaType};
 
@@ -84,7 +75,8 @@ pub(crate) struct SharedWidget<T, U: DrawAreaType, V> {
     pub(crate) event_sender: Sender<WidgetEvent>,
     pub(crate) frame_asked: bool,
     pub(crate) force_redraw: bool,
-    pub(crate) wl_surface: Option<wl_surface::WlSurface>,
+    pub(crate) wl_surface: Option<WlSurface>,
+    pub(crate) window: Option<Window>,
     pub(crate) conn: Connection,
 
     pub(crate) mouse_handler: MouseHandler<T>,
@@ -99,6 +91,11 @@ impl<T: 'static + Default + Send, U: 'static + DrawAreaType, V: 'static + Surfac
             if let Some(surface) = self.wl_surface.as_mut() {
                 surface.frame(qh, FrameRequest::Redraw);
                 surface.commit();
+                self.conn.flush().expect("Disconnected from wayland");
+                self.frame_asked = true;
+            } else if let Some(window) = self.window.as_mut() {
+                window.wl_surface().frame(qh, FrameRequest::Redraw);
+                window.wl_surface().commit();
                 self.conn.flush().expect("Disconnected from wayland");
                 self.frame_asked = true;
             }
@@ -117,7 +114,8 @@ pub(crate) struct WidgetState<T, U: DrawAreaType, V> {
     pub(crate) output_state: OutputState,
     pub(crate) shm: Shm,
     pub(crate) compositor: CompositorState,
-    pub(crate) layer_shell: LayerShell,
+    pub(crate) layer_shell: Option<LayerShell>,
+    pub(crate) xdg_activation: Option<ActivationState>,
 
     pub(crate) need_redraw: bool,
     pub(crate) pool: Option<SlotPool>,
@@ -136,17 +134,30 @@ pub(crate) struct WidgetState<T, U: DrawAreaType, V> {
 
 impl<T: 'static + Default + Send, U: DrawAreaType, V: SurfaceTrait<T, U>> WidgetState<T, U, V> {
     pub fn draw(&mut self) {
-        let layer = match self.layer.clone() {
-            None => return,
-            Some(layer) => layer,
-        };
-        
+        let layer = self.layer.clone();
         {
-            // Protected access to shared_widget for the duration of this block
             let mut shared_widget = self.shared_widget.0.lock().unwrap();
+            let wayland_surface;
+            let SharedWidget {
+                app_state,
+                surfaces,
+                force_redraw,
+                window,
+                width,
+                height,
+                ..
+            } = &mut *shared_widget;
+            if let Some(window) = window {
+                wayland_surface = window.wl_surface();
+            } else {
+                wayland_surface = match layer.as_ref() {
+                    None => return,
+                    Some(layer) => layer.wl_surface(),
+                };
+            }
 
-            let width = shared_widget.width.unwrap();
-            let height = shared_widget.height.unwrap();
+            let width = width.unwrap();
+            let height = height.unwrap();
             let stride = width as i32 * 4;
             let (buffer, canvas) = self.pool
                 .as_mut()
@@ -157,20 +168,23 @@ impl<T: 'static + Default + Send, U: DrawAreaType, V: SurfaceTrait<T, U>> Widget
             let mut draw_area = U::get_draw_area(canvas, width, height);
 
             // Render with the user render function
-            let SharedWidget {
-                app_state,
-                surfaces,
-                force_redraw,
-                ..
-            } = &mut *shared_widget;
-            draw_surfaces::<T, U, V>(surfaces, app_state, width, height, &layer, &mut draw_area, width, height, *force_redraw);
-            shared_widget.force_redraw = false;
+            draw_surfaces::<T, U, V>(surfaces, app_state, width, height, &wayland_surface, &mut draw_area, width, height, *force_redraw);
 
             // Attach and commit to present.
-            buffer.attach_to(layer.wl_surface()).expect("buffer attach");
+            buffer.attach_to(wayland_surface).expect("buffer attach");
         }
         
-        layer.commit();
+        
+        let mut shared_widget = self.shared_widget.0.lock().unwrap();
+        shared_widget.force_redraw = false;
+        if let Some(window) = &shared_widget.window {
+            window.commit();
+        } else {
+            match layer.as_ref() {
+                None => return,
+                Some(layer) => layer.commit(),
+            };
+        }
     }
 
     fn update_size(&mut self, new_width: u32, new_height: u32) {
@@ -182,11 +196,11 @@ impl<T: 'static + Default + Send, U: DrawAreaType, V: SurfaceTrait<T, U>> Widget
     }
 }
 
-fn draw_surfaces<T, U: DrawAreaType, V: SurfaceTrait<T, U>>(surfaces: &mut Vec<V>, app_state: &mut T, parent_width: u32, parent_height: u32, layer: &LayerSurface, draw_area: &mut U::Type<'_>, total_width: u32, total_height: u32, force_redraw: bool) {
+fn draw_surfaces<T, U: DrawAreaType, V: SurfaceTrait<T, U>>(surfaces: &mut Vec<V>, app_state: &mut T, parent_width: u32, parent_height: u32, wayland_surface: &WlSurface, draw_area: &mut U::Type<'_>, total_width: u32, total_height: u32, force_redraw: bool) {
     surfaces.sort_by_key(|s| s.get_surface_data().id); // TODO: only call this when to_front_of is call on a Surface ?
     for surface in surfaces {
         // TODO: should redraw surfaces without need_redraw if they are above a redrawed surfaces (since they are sorted before the for loop, this should be easy)
-        surface.draw(app_state, parent_width, parent_height, layer, draw_area, total_width, total_height, force_redraw, draw_surfaces);
+        surface.draw(app_state, parent_width, parent_height, wayland_surface, draw_area, total_width, total_height, force_redraw, draw_surfaces);
     }
 }
 
@@ -251,36 +265,42 @@ impl<T: 'static + Default + Send, U: 'static + DrawAreaType, V: 'static + Surfac
     ) {
         // TODO: Must be a problem with several screen (can't test now) -> main screen should be at location (0, 0) ?
         // TODO: If we achieve to choose a screen, we may use the wlr-output-management extension that gives zwlr_output_head_v1
-        if self.layer.is_none() {
-            if let Some(info) = self.output_state.info(&output) {
-                let surface = self.compositor.create_surface(&qh);
-                let new_layer =
-                    self.layer_shell.create_layer_surface(&qh, surface.clone(), self.widget_layer, Some(self.widget_name.clone()), Some(&output));
-                
-                let (screen_width, screen_height) = (info.logical_size.unwrap().0 as u32, info.logical_size.unwrap().1 as u32);
-                if let Some(anchor) = self.widget_anchor {
-                    new_layer.set_anchor(anchor);
-                    let (top, right, bottom, left) = self.margin.get_margin(screen_width, screen_height);
-                    new_layer.set_margin(top, right, bottom, left);
-                }
-                let (width, height) = self.widget_size.get_dimension(screen_width, screen_height);
-                new_layer.set_size(width, height);
-                self.update_size(width, height);
+        let WidgetState {
+            layer_shell,
+            ..
+        } = self;
+        if let Some(layer_shell) = layer_shell {
+            if self.layer.is_none() {
+                if let Some(info) = self.output_state.info(&output) {
+                    let surface = self.compositor.create_surface(&qh);
+                    let new_layer =
+                        layer_shell.create_layer_surface(&qh, surface.clone(), self.widget_layer, Some(self.widget_name.clone()), Some(&output));
+                    
+                    let (screen_width, screen_height) = (info.logical_size.unwrap().0 as u32, info.logical_size.unwrap().1 as u32);
+                    if let Some(anchor) = self.widget_anchor {
+                        new_layer.set_anchor(anchor);
+                        let (top, right, bottom, left) = self.margin.get_margin(screen_width, screen_height);
+                        new_layer.set_margin(top, right, bottom, left);
+                    }
+                    let (width, height) = self.widget_size.get_dimension(screen_width, screen_height);
+                    new_layer.set_size(width, height);
+                    self.update_size(width, height);
 
-                // In order for the layer surface to be mapped, we need to perform an initial commit with no attached\
-                // buffer. For more info, see WaylandSurface::commit
-                // The compositor will respond with an initial configure that we can then use to present to the layer
-                // surface with the correct options.
-                new_layer.commit();
+                    // In order for the layer surface to be mapped, we need to perform an initial commit with no attached\
+                    // buffer. For more info, see WaylandSurface::commit
+                    // The compositor will respond with an initial configure that we can then use to present to the layer
+                    // surface with the correct options.
+                    new_layer.commit();
 
-                self.pool = Some(SlotPool::new((width * height * 4).try_into().expect("Too large dimension"), &self.shm).expect("Failed to create pool"));
-                self.layer = Some(new_layer);
-                {
-                    let (lock, _) = self.shared_widget.as_ref();
-                    let mut shared_widget = lock.lock().unwrap();
-                    shared_widget.wl_surface = Some(surface);
+                    self.pool = Some(SlotPool::new((width * height * 4).try_into().expect("Too large dimension"), &self.shm).expect("Failed to create pool"));
+                    self.layer = Some(new_layer);
+                    {
+                        let (lock, _) = self.shared_widget.as_ref();
+                        let mut shared_widget = lock.lock().unwrap();
+                        shared_widget.wl_surface = Some(surface);
+                    }
+                    self.need_redraw = true;
                 }
-                self.need_redraw = true;
             }
         }
     }
@@ -415,6 +435,60 @@ impl<T: 'static + Default + Send, U: DrawAreaType, V: SurfaceTrait<T, U>> Dispat
     }
 }
 
+impl<T: 'static + Default + Send, U: DrawAreaType, V: SurfaceTrait<T, U>> WindowHandler for WidgetState<T, U, V> {
+    fn request_close(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &Window) {
+        let mut shared_widget = self.shared_widget.0.lock().unwrap();
+        if shared_widget.event_sender.send(WidgetEvent::Exit).is_err() {
+            println!("Error: exit not sent");
+        }
+        shared_widget.exit = true;
+    }
+
+    fn configure(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _window: &Window,
+        configure: WindowConfigure,
+        _serial: u32,
+    ) {
+        {
+            let mut shared_widget = self.shared_widget.0.lock().unwrap();
+            let new_width = configure.new_size.0.map(|v| v.get());
+            let new_height = configure.new_size.1.map(|v| v.get());
+            if new_width != None && new_height != None {
+                if shared_widget.width != new_width || shared_widget.height != new_height {
+                    shared_widget.width = new_width;
+                    shared_widget.height = new_height;
+                    self.need_redraw = true;
+                }
+            }
+        }
+
+        if self.need_redraw {
+            self.need_redraw = false;
+            self.draw();
+        }
+    }
+}
+
+impl<T, U: DrawAreaType, V> ActivationHandler for WidgetState<T, U, V> {
+    type RequestData = RequestData;
+
+    fn new_token(&mut self, token: String, _data: &Self::RequestData) {
+        let shared_widget = self.shared_widget.0.lock().unwrap();
+        let WidgetState {
+            xdg_activation,
+            ..
+        } = self;
+        if let Some(xdg_activation) = xdg_activation {
+            xdg_activation
+                .activate::<WidgetState<T, U, V>>(shared_widget.window.as_ref().unwrap().wl_surface(), token);
+        }
+    }
+}
+
+
 impl<T, U: DrawAreaType, V> ShmHandler for WidgetState<T, U, V> {
     fn shm_state(&mut self) -> &mut Shm {
         &mut self.shm
@@ -435,6 +509,9 @@ delegate_seat!(@<T, U, V> WidgetState<T, U, V> where T: 'static + Default + Send
 delegate_pointer!(@<T, U, V> WidgetState<T, U, V> where T: 'static + Default + Send, U: 'static + DrawAreaType, V: 'static + SurfaceTrait<T, U>);
 delegate_layer!(@<T, U, V> WidgetState<T, U, V> where T: 'static + Default + Send, U: 'static + DrawAreaType, V: 'static + SurfaceTrait<T, U>);
 delegate_registry!(@<T, U, V> WidgetState<T, U, V> where T: 'static + Default + Send, U: 'static + DrawAreaType, V: 'static + SurfaceTrait<T, U>);
+delegate_xdg_shell!(@<T, U, V> WidgetState<T, U, V> where T: 'static + Default + Send, U: 'static + DrawAreaType, V: 'static + SurfaceTrait<T, U>);
+delegate_xdg_window!(@<T, U, V> WidgetState<T, U, V> where T: 'static + Default + Send, U: 'static + DrawAreaType, V: 'static + SurfaceTrait<T, U>);
+delegate_activation!(@<T, U, V> WidgetState<T, U, V> where T: 'static + Default + Send, U: 'static + DrawAreaType, V: 'static + SurfaceTrait<T, U>);
 
 /* For this to work, I edited my local version of delegate_compositor macro of SCTK to add this (same for others with small edit for each one, juste the name):
 At smithay-client-toolkit-version/src/compositor.rs

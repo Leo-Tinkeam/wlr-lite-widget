@@ -1,5 +1,6 @@
 use std::{io::Error, marker::PhantomData, sync::{atomic::{AtomicI32, Ordering}, mpsc::Sender}};
-use smithay_client_toolkit::{seat::pointer::AxisScroll, shell::{WaylandSurface, wlr_layer::LayerSurface}};
+use smithay_client_toolkit::seat::pointer::AxisScroll;
+use wayland_client::protocol::wl_surface::WlSurface;
 use crate::{MouseButton, MouseHandler, MouseResponse, WidgetPosition, WidgetSize, widget::WidgetEvent, widget_builder::DrawAreaType};
 
 static NEXT_SURFACE_ID: AtomicI32 = AtomicI32::new(1);
@@ -162,8 +163,8 @@ pub trait SurfaceTrait<T, U: DrawAreaType>: Sized {
         surface_data.childs_surfaces.push(surface);
     }
 
-    fn draw(&mut self, app_state: &mut T, parent_width: u32, parent_height: u32, layer: &LayerSurface, draw_area: &mut U::Type<'_>, total_width: u32, total_height: u32, force_redraw: bool,
-        draw_surfaces: fn(&mut Vec<Self>, &mut T, u32, u32, &LayerSurface, &mut U::Type<'_>, u32, u32, bool)) {
+    fn draw(&mut self, app_state: &mut T, parent_width: u32, parent_height: u32, wayland_surface: &WlSurface, draw_area: &mut U::Type<'_>, total_width: u32, total_height: u32, force_redraw: bool,
+        draw_surfaces: fn(&mut Vec<Self>, &mut T, u32, u32, &WlSurface, &mut U::Type<'_>, u32, u32, bool)) {
         let (surface_width, surface_height) = self.get_surface_data_mut().size.get_dimension(parent_width, parent_height);
         let mut force_child_redraw = false;
         if self.get_surface_data_mut().need_redraw || force_redraw {
@@ -171,10 +172,10 @@ pub trait SurfaceTrait<T, U: DrawAreaType>: Sized {
             if let Some(real_size) = self.get_surface_data_mut().real_size {
                 self.get_surface_data_mut().need_redraw = false;
                 self.render(draw_area, total_width, total_height, real_size, app_state);
-                layer.wl_surface().damage_buffer(real_size.min_x as i32, real_size.min_y as i32, surface_width as i32, surface_height as i32); // TODO: maybe surface.render should return the area to damage (to accept damaging more than his area for shadow or restrict to a smaller area)
+                wayland_surface.damage_buffer(real_size.min_x as i32, real_size.min_y as i32, surface_width as i32, surface_height as i32); // TODO: maybe surface.render should return the area to damage (to accept damaging more than his area for shadow or restrict to a smaller area)
             }
         }
-        draw_surfaces(&mut self.get_surface_data_mut().childs_surfaces, app_state, surface_width, surface_height, layer, draw_area, total_width, total_height, force_child_redraw);
+        draw_surfaces(&mut self.get_surface_data_mut().childs_surfaces, app_state, surface_width, surface_height, wayland_surface, draw_area, total_width, total_height, force_child_redraw);
     }
 }
 
