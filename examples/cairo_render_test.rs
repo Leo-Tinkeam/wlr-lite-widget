@@ -1,4 +1,4 @@
-use wlr_lite_widget::{CairoDrawArea, CairoSurface, MouseButton, MouseResponse, SizeUnit, StandardDrawArea, SurfaceBox, SurfaceTrait, WidgetBuilder, WidgetPosition, WidgetSize, load_font};
+use wlr_lite_widget::{CairoDrawArea, CairoSurface, MouseButton, MouseResponse, Rectangle, SizeUnit, StandardDrawArea, SurfaceBox, SurfaceTrait, WidgetBuilder, WidgetPosition, WidgetSize, load_font};
 use std::thread;
 use std::time::Duration;
 
@@ -67,10 +67,16 @@ fn main() {
 
 fn render(canvas_struct: &mut CairoDrawArea, widget_width: u32, widget_height: u32, _surface_box: SurfaceBox, app_state: &mut MyStruct) {
     if app_state.clicked {
-        canvas_struct.add_rect(0, 0, widget_width, widget_height, 255, 0, 0, 255);
+        canvas_struct.draw_rect(
+            Rectangle::from_coords(0, 0, widget_width, widget_height)
+                .with_color_rgba(255, 0, 0, 255)
+        );
         canvas_struct.add_text("This is a text example ! 🚀🌟👋", &app_state.font_bytes, 0, 0, 20f32, 0, 255, 0, 255).expect("Erreur lors du dessin du texte");
     } else {
-        canvas_struct.add_rect(0, 0, widget_width, widget_height, 0, 255, 0, 255);
+        canvas_struct.draw_rect(
+            Rectangle::from_coords(0, 0, widget_width, widget_height)
+                .with_color_rgba(0, 255, 0, 255)
+        );
         canvas_struct.add_jpg("image.jpg", 100, 0, 160, 90).expect("Error while drawing jpg image");
     }
 }

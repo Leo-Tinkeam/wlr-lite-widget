@@ -10,10 +10,12 @@ mod widget_builder;
 
 mod backend_common;
 use backend_common::surface_common;
+use backend_common::rectangle;
 
 #[cfg(feature = "cairo-rs")]
 pub use cairo_surface::{CairoDrawArea, CairoSurface, WithCairo};
 pub use mouse_handler::{MouseButton, MouseResponse};
+pub use rectangle::Rectangle;
 pub use settings::{SizeUnit, WidgetAnchor, WidgetMargin, WidgetPosition, WidgetSize};
 pub use smithay_client_toolkit::seat::pointer::AxisScroll;
 pub use smithay_client_toolkit::shell::wlr_layer::{Anchor, Layer};

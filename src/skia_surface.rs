@@ -1,7 +1,7 @@
 use std::marker::PhantomData;
 use swash::scale::image::Content;
 use tiny_skia::{Color, FilterQuality, Paint, Pixmap, PixmapMut, PixmapPaint, PixmapRef, Rect, Transform};
-use crate::{MouseHandler, StandardDrawArea, SurfaceBox, SurfaceData, SurfaceTrait, WidgetPosition, WidgetSize, backend_common::{image_loader::render_jpg, surface_common::DrawImageError, text_shaper::render_text}, get_next_surface_id, surface_common::DrawTextError, widget_builder::DrawAreaType};
+use crate::{MouseHandler, StandardDrawArea, SurfaceBox, SurfaceData, SurfaceTrait, WidgetPosition, WidgetSize, backend_common::{image_loader::render_jpg, rectangle::Rectangle, surface_common::DrawImageError, text_shaper::render_text}, get_next_surface_id, surface_common::DrawTextError, widget_builder::DrawAreaType};
 
 pub struct WithSkia;
 
@@ -69,15 +69,15 @@ pub struct SkiaDrawArea<'a> {
 }
 
 impl<'a> StandardDrawArea for SkiaDrawArea<'a> {
-    fn add_rect(&mut self, left: u32, top: u32, right: u32, bottom: u32, r: u8, g: u8, b: u8, a: u8) {
+    fn draw_rect(&mut self, rectangle: Rectangle) {
         let mut paint = Paint::default();
-        let rect = Rect::from_ltrb(
-            left as f32,
-            top as f32,
-            right as f32,
-            bottom as f32,
+        let rect = Rect::from_xywh(
+            rectangle.x as f32,
+            rectangle.y as f32,
+            rectangle.width as f32,
+            rectangle.height as f32,
         ).unwrap();
-        paint.set_color_rgba8(b, g, r, a); // Wayland buffer are BGRA
+        paint.set_color_rgba8(rectangle.b, rectangle.g, rectangle.r, rectangle.a); // Wayland buffer are BGRA
         self.pixmap.fill_rect(
             rect,
             &paint,

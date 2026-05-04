@@ -1,7 +1,7 @@
 use std::{io::Error, marker::PhantomData, sync::{atomic::{AtomicI32, Ordering}, mpsc::Sender}};
 use smithay_client_toolkit::seat::pointer::AxisScroll;
 use wayland_client::protocol::wl_surface::WlSurface;
-use crate::{MouseButton, MouseHandler, MouseResponse, WidgetPosition, WidgetSize, widget::WidgetEvent, widget_builder::DrawAreaType};
+use crate::{MouseButton, MouseHandler, MouseResponse, WidgetPosition, WidgetSize, backend_common::rectangle::Rectangle, widget::WidgetEvent, widget_builder::DrawAreaType};
 
 static NEXT_SURFACE_ID: AtomicI32 = AtomicI32::new(1);
 
@@ -22,7 +22,7 @@ pub(crate) fn get_next_surface_id() -> i32 {
 }
 
 pub trait StandardDrawArea {
-    fn add_rect(&mut self, left: u32, top: u32, right: u32, bottom: u32, r: u8, g: u8, b: u8, a: u8);
+    fn draw_rect(&mut self, rectangle: Rectangle);
 
     fn add_text(&mut self, text: &str, font_bytes: &[u8], left: u32, top: u32, text_size: f32, r: u8, g: u8, b: u8, a: u8) -> Result<(), DrawTextError>;
 

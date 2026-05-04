@@ -1,7 +1,7 @@
 use std::marker::PhantomData;
 use cairo::{Context, Format, ImageSurface};
 use swash::scale::image::Content;
-use crate::{DrawAreaType, MouseHandler, StandardDrawArea, SurfaceBox, SurfaceData, SurfaceTrait, WidgetPosition, WidgetSize, backend_common::{image_loader::render_jpg, surface_common::DrawImageError, text_shaper::render_text}, get_next_surface_id};
+use crate::{DrawAreaType, MouseHandler, StandardDrawArea, SurfaceBox, SurfaceData, SurfaceTrait, WidgetPosition, WidgetSize, backend_common::{image_loader::render_jpg, rectangle::Rectangle, surface_common::DrawImageError, text_shaper::render_text}, get_next_surface_id};
 
 pub struct WithCairo;
 
@@ -81,20 +81,18 @@ pub struct CairoDrawArea<'a> {
 }
 
 impl<'a> StandardDrawArea for CairoDrawArea<'a> {
-    fn add_rect(&mut self, left: u32, top: u32, right: u32, bottom: u32, r: u8, g: u8, b: u8, a: u8) {
-        let width = (right - left) as f64;
-        let height = (bottom - top) as f64;
+    fn draw_rect(&mut self, rectangle: Rectangle) {
         self.context.rectangle(
-            left as f64,
-            top as f64,
-            width,
-            height,
+            rectangle.x as f64,
+            rectangle.y as f64,
+            rectangle.width as f64,
+            rectangle.height as f64,
         );
         self.context.set_source_rgba(
-            r as f64 / 255.0,
-            g as f64 / 255.0,
-            b as f64 / 255.0,
-            a as f64 / 255.0,
+            rectangle.r as f64 / 255.0,
+            rectangle.g as f64 / 255.0,
+            rectangle.b as f64 / 255.0,
+            rectangle.a as f64 / 255.0,
         );
         self.context.fill().expect("Cairo draw error");
     }
